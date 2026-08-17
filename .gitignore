@@ -12,7 +12,7 @@ huggingface/
 node_modules/
 dist/
 .vite/
-
+NagarAI_env/
 # Local database
 *.db
 *.sqlite
