@@ -293,6 +293,10 @@ def llm_extract(raw_text, api_key=None):
 
     try:
         import httpx
+        generation_config = {"maxOutputTokens": 800, "temperature": 0}
+        if os.environ.get("GEMINI_NO_THINKING", "1") == "1":
+            generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+
         resp = httpx.post(
             GEMINI_URL.format(model=GEMINI_MODEL),
             headers={"x-goog-api-key": key, "Content-Type": "application/json"},
@@ -312,11 +316,7 @@ def llm_extract(raw_text, api_key=None):
                         )
                     }]
                 }],
-                "generationConfig": {
-                    "maxOutputTokens": 800,
-                    "temperature": 0,
-                    "thinkingConfig": {"thinkingBudget": 0},
-                },
+                "generationConfig": generation_config,
             },
             timeout=12.0,
         )
