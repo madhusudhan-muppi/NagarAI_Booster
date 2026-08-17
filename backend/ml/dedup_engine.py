@@ -337,18 +337,28 @@ def main(path):
     print("\n" + "-" * 74)
     print("PRIORITISED QUEUE")
     print("-" * 74)
-    for rank, (p, cl) in enumerate(scored, 1):
-        lane = "HAZARD" if p["hazard_lane"] else "routine"
-        ids = ", ".join(c["id"] for c in cl)
-        print(f"\n#{rank}  [{lane}]  score {p['final_score']}   {p['category']}")
-        print(f"     {cl[0]['description_en']}")
-        print(f"     complaints: {ids}")
-        print(f"     S={p['severity']} (S^2={p['severity_component']})  "
-              f"N={p['reporters']} (1+lnN={p['headcount_component']})  "
-              f"D={p['days_pending']} (1+D/7={p['ageing_component']})  "
-              f"P={p['proximity_component']}")
-        if p["proximity_site"]:
-            print(f"     proximity uplift: within 200 m of {p['proximity_site']}")
+
+    rank = 0
+    for lane_flag, lane_title in [
+        (True, "HAZARD LANE  --  worked first regardless of report count"),
+        (False, "ROUTINE LANE  --  ranked by priority score"),
+    ]:
+        lane_items = [(p, cl) for p, cl in scored if p["hazard_lane"] == lane_flag]
+        if not lane_items:
+            continue
+        print(f"\n{lane_title}")
+        for p, cl in lane_items:
+            rank += 1
+            ids = ", ".join(c["id"] for c in cl)
+            print(f"\n#{rank}  score {p['final_score']}   {p['category']}")
+            print(f"     {cl[0]['description_en']}")
+            print(f"     complaints: {ids}")
+            print(f"     S={p['severity']} (S^2={p['severity_component']})  "
+                  f"N={p['reporters']} (1+lnN={p['headcount_component']})  "
+                  f"D={p['days_pending']} (1+D/7={p['ageing_component']})  "
+                  f"P={p['proximity_component']}")
+            if p["proximity_site"]:
+                print(f"     proximity uplift: within 200 m of {p['proximity_site']}")
 
     print("\n" + "=" * 74)
     print("WORKED EXAMPLE FROM THE PROBLEM STATEMENT")
