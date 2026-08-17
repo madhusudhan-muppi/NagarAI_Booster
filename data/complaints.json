@@ -223,5 +223,20 @@
     "description_en": "Garbage pile beside the road at Velachery bus stand",
     "created_at": "2026-08-16T10:00:00",
     "days_pending": 1
+  },
+  {
+    "id": "C016",
+    "citizen_id": "u_29a5",
+    "raw_text": "velachery bus stand pakathula periya kuzhi, bike skid aagudhu",
+    "transcript": null,
+    "photo_url": null,
+    "category": "pothole",
+    "severity": 3,
+    "location_lat": 12.96895,
+    "location_lon": 80.23928,
+    "location_text": null,
+    "description_en": "Large pothole near",
+    "created_at": "2026-08-17T17:13:26+00:00",
+    "days_pending": 0
   }
 ]

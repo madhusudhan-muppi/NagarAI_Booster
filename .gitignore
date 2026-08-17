@@ -21,3 +21,8 @@ NagarAI_env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime state -- seed_complaints.json is the source of truth
+data/complaints.json
+data/cluster_status.json
+data/uploads/

@@ -532,7 +532,12 @@
         function card(c) {
             const p = c.priority;
             const mem = c.members.map(m =>
-                `<div class="member"><code>${m.id}</code> · S${m.severity} — ${escapeHtml(m.raw_text)}</div>`).join("");
+                `<div class="member"><code>${m.id}</code> · S${m.severity}
+                    <div>${escapeHtml(m.raw_text)}</div>
+                    ${m.description_en !== m.raw_text
+                    ? `<div style="color:var(--civic);font-size:11px">→ ${escapeHtml(m.description_en)}</div>`
+                    : ""}
+                </div>`).join("");
             return `<article class="card ${c.hazard_lane ? "hz" : ""} ${selected === c.cluster_key ? "sel" : ""}
       ${c.status === "resolved" ? "done" : ""}" data-key="${c.cluster_key}">
     <div class="top">

@@ -70,8 +70,9 @@ def build_queue():
             "lon": centre["location_lon"] if centre else None,
             "members": [
                 {"id": c["id"], "raw_text": c["raw_text"],
-                 "transcript": c.get("transcript"),
-                 "severity": c["severity"], "photo_url": c.get("photo_url")}
+                "description_en": c["description_en"],
+                "transcript": c.get("transcript"),
+                "severity": c["severity"], "photo_url": c.get("photo_url")}
                 for c in cl
             ],
             "affected_citizens": p["reporters"],

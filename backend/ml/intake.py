@@ -241,38 +241,45 @@ def clean_description(text, category):
     return cut + "..."
 
 
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
+              "{model}:generateContent")
+
+
 def llm_normalise(raw_text, category, api_key=None):
     """
     Optional LLM pass producing a clean English one-liner from code-mixed input.
     Returns None when no key is configured, and the caller falls back to
     clean_description(). Kept optional on purpose: the demo must run offline.
     """
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
         return None
     try:
         import httpx
         resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"},
+            GEMINI_URL.format(model=GEMINI_MODEL),
+            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
             json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 100,
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        "Rewrite this civic complaint as ONE clean English line "
-                        "under 90 characters. Keep the location and the problem. "
-                        "No preamble, no quotes, output the line only.\n\n"
-                        f"Category: {category}\nComplaint: {raw_text}"
-                    ),
+                "contents": [{
+                    "parts": [{
+                        "text": (
+                            "Rewrite this civic complaint as ONE clean English "
+                            "line under 90 characters. Keep the location and the "
+                            "problem. No preamble, no quotes, output the line only.\n\n"
+                            f"Category: {category}\nComplaint: {raw_text}"
+                        )
+                    }]
                 }],
+                "generationConfig": {"maxOutputTokens": 100, "temperature": 0},
             },
             timeout=12.0,
         )
         resp.raise_for_status()
-        parts = resp.json().get("content", [])
+        candidates = resp.json().get("candidates") or []
+        if not candidates:
+            return None          # safety block or empty response
+        parts = candidates[0].get("content", {}).get("parts", [])
         line = " ".join(p.get("text", "") for p in parts).strip()
         return line or None
     except Exception:
