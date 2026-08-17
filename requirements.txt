@@ -1,3 +1,6 @@
+# Install CPU torch FIRST -- pip otherwise resolves a ~6 GB CUDA build
+# that is useless on Intel Arc, AMD, or any CPU-only laptop:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 fastapi==0.104.0
 uvicorn==0.24.0
 python-telegram-bot==20.0

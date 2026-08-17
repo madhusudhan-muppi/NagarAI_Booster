@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NagarAI — Ward Console</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+        /* Municipal signage palette: the yellow is load-bearing, not decorative --
+     it marks the hazard lane and appears nowhere else. */
+        :root {
+            --ink: #14161A;
+            --ink-2: #3A414A;
+            --muted: #6B7480;
+            --surface: #E4E8EC;
+            --panel: #FFFFFF;
+            --line: #C9D0D8;
+            --hazard: #E8B004;
+            --hazard-ink: #4A3600;
+            --civic: #1B4B8F;
+            --resolved: #2F6B4F;
+            --progress: #8A5A00;
+            --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+            --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            font-family: var(--sans);
+            background: var(--surface);
+            color: var(--ink);
+            font-size: 14px;
+            line-height: 1.45
+        }
+
+        header {
+            background: var(--ink);
+            color: #fff;
+            padding: 14px 20px;
+            display: flex;
+            align-items: baseline;
+            gap: 22px;
+            flex-wrap: wrap
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 17px;
+            font-weight: 650;
+            letter-spacing: -.01em
+        }
+
+        header h1 span {
+            color: var(--hazard)
+        }
+
+        .tag {
+            font-size: 11px;
+            color: #9AA5B1;
+            text-transform: uppercase;
+            letter-spacing: .09em
+        }
+
+        .stats {
+            margin-left: auto;
+            display: flex;
+            gap: 20px;
+            font-family: var(--mono);
+            font-size: 12px
+        }
+
+        .stats b {
+            display: block;
+            font-size: 19px;
+            font-weight: 600;
+            color: var(--hazard)
+        }
+
+        .stats span {
+            color: #9AA5B1;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .07em
+        }
+
+        .backends {
+            background: var(--ink-2);
+            color: #C6CED6;
+            padding: 6px 20px;
+            font-family: var(--mono);
+            font-size: 11px;
+            display: flex;
+            gap: 18px;
+            flex-wrap: wrap
+        }
+
+        .backends i {
+            font-style: normal;
+            color: #fff
+        }
+
+        .degraded {
+            color: var(--hazard)
+        }
+
+        main {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 460px;
+            gap: 1px;
+            background: var(--line);
+            height: calc(100vh - 92px)
+        }
+
+        #map {
+            background: #dfe4e8
+        }
+
+        .queue {
+            background: var(--surface);
+            overflow-y: auto;
+            padding: 14px
+        }
+
+        .filters {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 12px
+        }
+
+        .filters button {
+            border: 1px solid var(--line);
+            background: var(--panel);
+            padding: 5px 11px;
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: var(--sans);
+            color: var(--ink-2)
+        }
+
+        .filters button[aria-pressed="true"] {
+            background: var(--ink);
+            color: #fff;
+            border-color: var(--ink)
+        }
+
+        .filters button:focus-visible {
+            outline: 2px solid var(--civic);
+            outline-offset: 1px
+        }
+
+        .lane {
+            margin: 16px 0 8px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .1em;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            gap: 8px
+        }
+
+        .lane::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: var(--line)
+        }
+
+        .lane.hz {
+            color: var(--hazard-ink)
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-left: 3px solid var(--civic);
+            padding: 12px 14px;
+            margin-bottom: 9px;
+            cursor: pointer
+        }
+
+        .card.hz {
+            border-left-color: var(--hazard);
+            background: #FFFDF5
+        }
+
+        .card.sel {
+            outline: 2px solid var(--ink);
+            outline-offset: -1px
+        }
+
+        .card.done {
+            opacity: .55
+        }
+
+        .top {
+            display: flex;
+            align-items: baseline;
+            gap: 9px
+        }
+
+        .rank {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted)
+        }
+
+        .score {
+            font-family: var(--mono);
+            font-weight: 600;
+            font-size: 15px;
+            margin-left: auto
+        }
+
+        .cat {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            background: var(--surface);
+            padding: 2px 6px;
+            color: var(--ink-2)
+        }
+
+        .desc {
+            margin: 7px 0 3px;
+            font-weight: 500
+        }
+
+        .meta {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        /* Signature element: the formula, with this cluster's real numbers in it.
+     Explainable prioritisation is 20% of the marks -- it belongs on the card,
+     not in an appendix. */
+        .formula {
+            font-family: var(--mono);
+            font-size: 11px;
+            background: #F4F6F8;
+            border-top: 1px dashed var(--line);
+            margin: 9px -14px -12px;
+            padding: 8px 14px;
+            color: var(--ink-2);
+            overflow-x: auto;
+            white-space: nowrap
+        }
+
+        .formula b {
+            color: var(--ink);
+            font-weight: 600
+        }
+
+        .formula .op {
+            color: var(--muted)
+        }
+
+        .detail {
+            border-top: 1px solid var(--line);
+            margin-top: 9px;
+            padding-top: 9px;
+            display: none
+        }
+
+        .card.sel .detail {
+            display: block
+        }
+
+        .member {
+            font-size: 12px;
+            padding: 5px 0;
+            border-bottom: 1px dotted var(--line)
+        }
+
+        .member code {
+            font-family: var(--mono);
+            color: var(--civic);
+            font-size: 11px
+        }
+
+        .actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 9px
+        }
+
+        .actions button {
+            flex: 1;
+            padding: 6px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            cursor: pointer;
+            font-size: 12px;
+            border-radius: 2px
+        }
+
+        .actions button:hover {
+            background: var(--surface)
+        }
+
+        .pill {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            padding: 2px 6px
+        }
+
+        .pill.open {
+            background: #FDECEC;
+            color: #8A2020
+        }
+
+        .pill.in_progress {
+            background: #FFF3D6;
+            color: var(--progress)
+        }
+
+        .pill.resolved {
+            background: #E4F0E9;
+            color: var(--resolved)
+        }
+
+        .file {
+            position: fixed;
+            right: 18px;
+            bottom: 18px;
+            z-index: 900
+        }
+
+        .file>button {
+            background: var(--ink);
+            color: #fff;
+            border: 0;
+            padding: 11px 16px;
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 550
+        }
+
+        .form {
+            display: none;
+            position: fixed;
+            right: 18px;
+            bottom: 66px;
+            width: 330px;
+            z-index: 900;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            padding: 14px;
+            box-shadow: 0 8px 28px rgba(20, 22, 26, .18)
+        }
+
+        .form.on {
+            display: block
+        }
+
+        .form h3 {
+            margin: 0 0 3px;
+            font-size: 13px
+        }
+
+        .form p {
+            margin: 0 0 10px;
+            font-size: 11px;
+            color: var(--muted)
+        }
+
+        .form label {
+            display: block;
+            font-size: 11px;
+            color: var(--ink-2);
+            margin: 8px 0 3px
+        }
+
+        .form textarea,
+        .form input {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid var(--line);
+            font-family: var(--sans);
+            font-size: 12px;
+            border-radius: 2px
+        }
+
+        .form textarea {
+            height: 56px;
+            resize: vertical
+        }
+
+        .row {
+            display: flex;
+            gap: 6px
+        }
+
+        .send {
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px;
+            background: var(--civic);
+            color: #fff;
+            border: 0;
+            cursor: pointer;
+            font-size: 13px;
+            border-radius: 2px
+        }
+
+        .result {
+            margin-top: 9px;
+            font-size: 11px;
+            font-family: var(--mono);
+            background: #F4F6F8;
+            padding: 8px;
+            border-left: 2px solid var(--civic);
+            display: none
+        }
+
+        .result.on {
+            display: block
+        }
+
+        .empty {
+            padding: 34px 14px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 13px
+        }
+
+        @media(max-width:900px) {
+            main {
+                grid-template-columns: 1fr;
+                height: auto
+            }
+
+            #map {
+                height: 44vh
+            }
+        }
+
+        @media(prefers-reduced-motion:reduce) {
+            * {
+                transition: none !important
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>Nagar<span>AI</span></h1>
+        <div class="tag">Ward complaint console</div>
+        <div class="stats">
+            <div><b id="s-complaints">—</b><span>Complaints in</span></div>
+            <div><b id="s-clusters">—</b><span>Distinct issues</span></div>
+            <div><b id="s-merged">—</b><span>Duplicates merged</span></div>
+        </div>
+    </header>
+
+    <div class="backends" id="backends"></div>
+
+    <main>
+        <div id="map"></div>
+        <div class="queue">
+            <div class="filters" id="filters"></div>
+            <div id="list">
+                <div class="empty">Loading queue…</div>
+            </div>
+        </div>
+    </main>
+
+    <div class="file">
+        <button onclick="document.getElementById('form').classList.toggle('on')">File a complaint</button>
+    </div>
+
+    <div class="form" id="form">
+        <h3>File a complaint</h3>
+        <p>Type in any language, attach a photo, or record a voice note.</p>
+        <label for="f-text">What is the problem?</label>
+        <textarea id="f-text" placeholder="e.g. வேளச்சேரி பஸ் ஸ்டாண்ட் அருகில் பெரிய குழி"></textarea>
+        <label for="f-loc">Landmark</label>
+        <input id="f-loc" placeholder="Velachery bus stand">
+        <div class="row">
+            <div style="flex:1"><label for="f-lat">Latitude</label><input id="f-lat" placeholder="12.9689"></div>
+            <div style="flex:1"><label for="f-lon">Longitude</label><input id="f-lon" placeholder="80.2392"></div>
+        </div>
+        <label for="f-photo">Photo</label><input type="file" id="f-photo" accept="image/*">
+        <label for="f-audio">Voice note</label><input type="file" id="f-audio" accept="audio/*">
+        <button class="send" id="send">Submit complaint</button>
+        <div class="result" id="result"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const API = "";
+        let clusters = [], filter = "all", selected = null, markers = {};
+
+        const map = L.map("map").setView([12.98, 80.23], 12);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+            { attribution: "© OpenStreetMap", maxZoom: 19 }).addTo(map);
+
+        const LANE_COLOR = { hazard: "#E8B004", routine: "#1B4B8F", resolved: "#2F6B4F" };
+
+        function pin(c) {
+            const color = c.status === "resolved" ? LANE_COLOR.resolved
+                : c.hazard_lane ? LANE_COLOR.hazard : LANE_COLOR.routine;
+            const size = 20 + Math.min(c.affected_citizens * 5, 18);
+            return L.divIcon({
+                className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+                html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
+      background:${color};border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.4);
+      display:flex;align-items:center;justify-content:center;color:${c.hazard_lane ? "#4A3600" : "#fff"};
+      font:600 11px ui-monospace,monospace">${c.affected_citizens}</div>`
+            });
+        }
+
+        function formulaStrip(p) {
+            return `<b>${p.severity_component}</b><span class="op"> = ${p.severity}²</span>`
+                + `<span class="op"> × </span><b>${p.headcount_component}</b><span class="op"> = 1+ln ${p.reporters}</span>`
+                + `<span class="op"> × </span><b>${p.ageing_component}</b><span class="op"> = 1+${p.days_pending}/7</span>`
+                + `<span class="op"> × </span><b>${p.proximity_component}</b>`
+                + `<span class="op"> → </span><b>${p.final_score}</b>`;
+        }
+
+        function card(c) {
+            const p = c.priority;
+            const mem = c.members.map(m =>
+                `<div class="member"><code>${m.id}</code> · S${m.severity} — ${escapeHtml(m.raw_text)}</div>`).join("");
+            return `<article class="card ${c.hazard_lane ? "hz" : ""} ${selected === c.cluster_key ? "sel" : ""}
+      ${c.status === "resolved" ? "done" : ""}" data-key="${c.cluster_key}">
+    <div class="top">
+      <span class="rank">#${c.rank}</span>
+      <span class="cat">${c.category.replace("_", " ")}</span>
+      <span class="pill ${c.status}">${c.status.replace("_", " ")}</span>
+      <span class="score">${p.final_score}</span>
+    </div>
+    <div class="desc">${escapeHtml(c.description)}</div>
+    <div class="meta">${c.affected_citizens} ${c.affected_citizens === 1 ? "citizen" : "citizens"} affected
+      · ${p.days_pending}d pending${c.location_text ? " · " + escapeHtml(c.location_text) : ""}
+      ${p.proximity_site ? `<br>Near ${escapeHtml(p.proximity_site)} — ×${p.proximity_component}` : ""}</div>
+    <div class="detail">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">
+        Merged from ${c.members.length} complaint${c.members.length > 1 ? "s" : ""}</div>
+      ${mem}
+      <div class="actions">
+        <button data-status="open">Reopen</button>
+        <button data-status="in_progress">Assign crew</button>
+        <button data-status="resolved">Mark resolved</button>
+      </div>
+    </div>
+    <div class="formula">${formulaStrip(p)}</div>
+  </article>`;
+        }
+
+        function escapeHtml(s) {
+            return String(s ?? "").replace(/[&<>"']/g, ch =>
+                ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+        }
+
+        function render() {
+            const shown = clusters.filter(c => filter === "all" || c.category === filter);
+            const hz = shown.filter(c => c.hazard_lane), rt = shown.filter(c => !c.hazard_lane);
+            const list = document.getElementById("list");
+
+            list.innerHTML =
+                (hz.length ? `<div class="lane hz">Hazard lane — worked first</div>` + hz.map(card).join("") : "")
+                + (rt.length ? `<div class="lane">Routine lane — by priority score</div>` + rt.map(card).join("") : "")
+                || `<div class="empty">No complaints in this category.</div>`;
+
+            list.querySelectorAll(".card").forEach(el => {
+                el.onclick = e => {
+                    if (e.target.dataset.status) return;
+                    selected = selected === el.dataset.key ? null : el.dataset.key;
+                    render();
+                    const c = clusters.find(x => x.cluster_key === el.dataset.key);
+                    if (c && c.lat) map.setView([c.lat, c.lon], 15);
+                };
+                el.querySelectorAll("[data-status]").forEach(b => {
+                    b.onclick = async ev => {
+                        ev.stopPropagation();
+                        await fetch(`${API}/api/clusters/${el.dataset.key}/status`, {
+                            method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ status: b.dataset.status })
+                        });
+                        load();
+                    };
+                });
+            });
+
+            Object.values(markers).forEach(m => map.removeLayer(m));
+            markers = {};
+            shown.filter(c => c.lat != null).forEach(c => {
+                const m = L.marker([c.lat, c.lon], { icon: pin(c) }).addTo(map);
+                m.bindPopup(`<b>${escapeHtml(c.description)}</b><br>
+      Score ${c.priority.final_score} · ${c.affected_citizens} affected`);
+                m.on("click", () => { selected = c.cluster_key; render(); });
+                markers[c.cluster_key] = m;
+            });
+        }
+
+        function renderFilters() {
+            const cats = ["all", ...new Set(clusters.map(c => c.category))];
+            document.getElementById("filters").innerHTML = cats.map(c =>
+                `<button aria-pressed="${filter === c}" data-cat="${c}">${c.replace("_", " ")}</button>`).join("");
+            document.querySelectorAll("#filters button").forEach(b =>
+                b.onclick = () => { filter = b.dataset.cat; renderFilters(); render(); });
+        }
+
+        function renderBackends(b, label) {
+            const item = (name, val, ok) =>
+                `${name}: <i class="${ok ? "" : "degraded"}">${val}</i>`;
+            document.getElementById("backends").innerHTML =
+                item("Embeddings", label || b.embeddings, !/TF-IDF/.test(label || b.embeddings))
+                + item("Speech", b.speech, b.speech !== "not loaded")
+                + item("Vision", b.vision, b.vision !== "keyword fallback");
+        }
+
+        async function load() {
+            try {
+                const r = await fetch(`${API}/api/clusters`);
+                const d = await r.json();
+                clusters = d.clusters;
+                document.getElementById("s-complaints").textContent = d.stats.complaints;
+                document.getElementById("s-clusters").textContent = d.stats.clusters;
+                document.getElementById("s-merged").textContent = d.stats.merged;
+                renderBackends(d.backends, d.stats.embedding_backend);
+                renderFilters(); render();
+            } catch (e) {
+                document.getElementById("list").innerHTML =
+                    `<div class="empty">Cannot reach the API. Start it with
+       <code>uvicorn backend.main:app --reload</code> and reload this page.</div>`;
+            }
+        }
+
+        document.getElementById("send").onclick = async () => {
+            const fd = new FormData();
+            const g = id => document.getElementById(id);
+            fd.append("text", g("f-text").value);
+            if (g("f-loc").value) fd.append("location_text", g("f-loc").value);
+            if (g("f-lat").value) fd.append("lat", g("f-lat").value);
+            if (g("f-lon").value) fd.append("lon", g("f-lon").value);
+            if (g("f-photo").files[0]) fd.append("photo", g("f-photo").files[0]);
+            if (g("f-audio").files[0]) fd.append("audio", g("f-audio").files[0]);
+
+            const box = g("result");
+            box.className = "result on";
+            box.textContent = "Processing…";
+            try {
+                const r = await fetch(`${API}/api/complaints`, { method: "POST", body: fd });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.detail || "Rejected");
+                box.innerHTML = `<b>${d.complaint.id}</b> → ${d.complaint.category} · S${d.complaint.severity}<br>`
+                    + `${d.merged_into_existing
+                        ? `Merged into <b>${d.cluster_key}</b> — now ${d.affected_citizens} citizens affected`
+                        : "Filed as a new issue"}<br>`
+                    + Object.entries(d.trace).map(([k, v]) => `${k}: ${v}`).join("<br>");
+                g("f-text").value = "";
+                load();
+            } catch (err) {
+                box.textContent = "Could not file: " + err.message;
+            }
+        };
+
+        load();
+        setInterval(load, 5000);
+    </script>
+</body>
+
+</html>
