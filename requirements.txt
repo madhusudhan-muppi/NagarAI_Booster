@@ -1,0 +1,12 @@
+fastapi==0.104.0
+uvicorn==0.24.0
+python-telegram-bot==20.0
+faster-whisper==0.10.0
+sentence-transformers==2.2.2
+pillow==10.0.0
+psycopg2-binary==2.9.0
+sqlalchemy==2.0.0
+pydantic==2.4.0
+python-dotenv==1.0.0
+httpx==0.25.0
+numpy==1.26.0
