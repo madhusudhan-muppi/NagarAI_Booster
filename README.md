@@ -6,8 +6,8 @@ An AI layer for municipal grievance management. Citizens file complaints natural
 
 ### 1. Clone & Setup
 ```bash
-git clone https://github.com/YOUR-USERNAME/nagarai.git
-cd nagarai
+git clone https://github.com/madhusudhan-muppi/NagarAI_Booster
+cd NagarAI_Booster
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
