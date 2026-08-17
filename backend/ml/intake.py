@@ -95,18 +95,34 @@ def _get_clip():
 
 
 def backend_status():
-    """What is actually running. Surfaced on the dashboard, honestly."""
-    try:
-        import sentence_transformers  # noqa: F401
-        embed = "sentence-transformers"
-    except Exception:
-        embed = "TF-IDF fallback"
-    return {
-        "speech": "faster-whisper" if _whisper not in (None, "unavailable") else "not loaded",
-        "vision": "CLIP ViT-B-32" if _clip not in (None, "unavailable") else "keyword fallback",
-        "embeddings": embed,
-    }
+    """What is actually available. Surfaced on the dashboard, honestly."""
+    def probe(module):
+        try:
+            __import__(module)
+            return True
+        except Exception:
+            return False
 
+    if _whisper not in (None, "unavailable"):
+        speech = "faster-whisper (loaded)"
+    elif probe("faster_whisper"):
+        speech = "faster-whisper (loads on first use)"
+    else:
+        speech = "not installed"
+
+    if _clip not in (None, "unavailable"):
+        vision = "CLIP ViT-B-32 (loaded)"
+    elif probe("open_clip"):
+        vision = "CLIP (loads on first use)"
+    else:
+        vision = "keyword fallback"
+
+    return {
+        "speech": speech,
+        "vision": vision,
+        "embeddings": "sentence-transformers" if probe("sentence_transformers")
+                      else "TF-IDF fallback",
+    }
 
 # ---------------------------------------------------------------------------
 # Stage 1 -- speech

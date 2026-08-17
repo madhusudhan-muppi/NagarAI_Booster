@@ -101,12 +101,18 @@ def haversine_m(lat1, lon1, lat2, lon2):
 #         with no model download -- useful when venue wifi dies.
 # ----------------------------------------------------------------------------
 
+_ST_MODEL = None
+
+
 def build_embedder(texts):
+    global _ST_MODEL
     try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        vectors = model.encode(texts, normalize_embeddings=True)
-        return [list(map(float, v)) for v in vectors], "sbert", "sentence-transformers/all-MiniLM-L6-v2"
+        if _ST_MODEL is None:
+            from sentence_transformers import SentenceTransformer
+            _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        vectors = _ST_MODEL.encode(texts, normalize_embeddings=True)
+        return ([list(map(float, v)) for v in vectors], "sbert",
+                "sentence-transformers/all-MiniLM-L6-v2")
     except Exception:
         return _tfidf(texts), "tfidf", "TF-IDF fallback (no ML model downloaded)"
 
