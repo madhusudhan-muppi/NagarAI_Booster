@@ -93,7 +93,7 @@ def build_queue():
         [c["description_en"] for c in complaints])
     clusters, merge_log = deduplicate(complaints, vectors, backend)
     statuses = store.load_statuses()
-    
+
     rows = []
     for cl in clusters:
         p = priority(cl)
@@ -110,18 +110,21 @@ def build_queue():
             "lon": centre["location_lon"] if centre else None,
             "members": [
                 {"id": c["id"], "raw_text": c["raw_text"],
-                "description_en": c["description_en"],
-                "transcript": c.get("transcript"),
-                "severity": c["severity"], "photo_url": c.get("photo_url")}
+                 "description_en": c["description_en"],
+                 "secondary_category": c.get("secondary_category"),
+                 "transcript": c.get("transcript"),
+                 "severity": c["severity"], "photo_url": c.get("photo_url")}
                 for c in cl
             ],
             "affected_citizens": p["reporters"],
             "priority": p,
+            "merges": [m for m in merge_log
+                       if m["merged"][0] in {c["id"] for c in cl}],
+            "has_conflict": any(c.get("secondary_category") for c in cl),
             "status": state.get("status", "open"),
             "status_note": state.get("note", ""),
             "updated_at": state.get("updated_at"),
         })
-    
 
     rows.sort(key=lambda r: (not r["hazard_lane"], -r["priority"]["final_score"]))
     for i, r in enumerate(rows, 1):
@@ -160,6 +163,12 @@ FORMULA_DOC = {
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "NagarAI/0.1"
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
     def _send(self, payload, code=200):
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -273,12 +282,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         sys.stderr.write(f"  {self.address_string()} {fmt % args}\n")
-        
-    def handle_one_request(self):
-        try:
-            super().handle_one_request()
-        except (BrokenPipeError, ConnectionResetError):
-            self.close_connection = True
 
 
 def main():
@@ -288,6 +291,7 @@ def main():
     print(f"  embeddings : {backends['embeddings']}")
     print(f"  speech     : {backends['speech']}")
     print(f"  vision     : {backends['vision']}")
+    print(f"  llm        : {backends.get('llm', 'n/a')}")
     print(f"\n  http://127.0.0.1:{port}    Ctrl-C to stop\n")
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 

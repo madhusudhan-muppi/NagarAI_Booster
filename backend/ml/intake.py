@@ -12,8 +12,7 @@ at a glance which components are real and which are degraded, rather than
 discovering it in Q&A.
 """
 
-import io
-import math
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -33,7 +32,9 @@ KEYWORDS = {
     "waterlogging": ["waterlog", "water logging", "flood", "stagnant", "drain",
                      "sewage", "tanni", "paani", "rain water", "knee deep"],
     "live_wire": ["live wire", "electric wire", "current", "sparking", "shock",
-                  "transformer", "cable hanging", "electrocut", "spark"],
+                  "transformer", "cable hanging", "electrocut", "spark", "wire",
+                  "cable", "thongu", "thongudhu", "kambi", "minsaram", "karant",
+                  "taar", "latak", "bijli", "eb line"],
 }
 
 # Words that indicate danger. Used ONLY to nudge severity upward for hazard
@@ -56,6 +57,10 @@ BASE_SEVERITY = {
 # ---------------------------------------------------------------------------
 # Optional backends
 # ---------------------------------------------------------------------------
+
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
+              "{model}:generateContent")
 
 _whisper = None
 _clip = None
@@ -120,9 +125,12 @@ def backend_status():
     return {
         "speech": speech,
         "vision": vision,
-        "embeddings": "sentence-transformers" if probe("sentence_transformers")
-                      else "TF-IDF fallback",
+        "embeddings": ("sentence-transformers" if probe("sentence_transformers")
+                       else "TF-IDF fallback"),
+        "llm": ("Gemini " + GEMINI_MODEL if os.environ.get("GEMINI_API_KEY")
+                else "no key -- rule-based descriptions"),
     }
+
 
 # ---------------------------------------------------------------------------
 # Stage 1 -- speech
@@ -257,20 +265,32 @@ def clean_description(text, category):
     return cut + "..."
 
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
-              "{model}:generateContent")
+_llm_cache = {}
 
 
-def llm_normalise(raw_text, category, api_key=None):
+def llm_extract(raw_text, api_key=None):
     """
-    Optional LLM pass producing a clean English one-liner from code-mixed input.
-    Returns None when no key is configured, and the caller falls back to
-    clean_description(). Kept optional on purpose: the demo must run offline.
+    Structured extraction: category + clean English one-liner, in one call.
+
+    The LLM classifies but deliberately does NOT set severity. Severity comes
+    from the vision model or the category table, because a model reading the
+    citizen's own words would let adjectives drive priority -- exactly the
+    gaming vector the ranking model is built to resist.
+
+    Returns None when no key is configured or the call fails, and the caller
+    falls back to keyword classification. The demo must run offline.
     """
+    if os.environ.get("NAGARAI_NO_LLM"):
+        return None
+
     key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
         return None
+
+    cached = _llm_cache.get(raw_text)
+    if cached is not None:
+        return cached
+
     try:
         import httpx
         resp = httpx.post(
@@ -280,25 +300,47 @@ def llm_normalise(raw_text, category, api_key=None):
                 "contents": [{
                     "parts": [{
                         "text": (
-                            "Rewrite this civic complaint as ONE clean English "
-                            "line under 90 characters. Keep the location and the "
-                            "problem. No preamble, no quotes, output the line only.\n\n"
-                            f"Category: {category}\nComplaint: {raw_text}"
+                            "You classify Indian civic complaints. The text may be "
+                            "Tamil, Hindi, English, or Roman-script transliteration.\n\n"
+                            "Return ONLY a JSON object, no markdown fence, with keys:\n"
+                            '  "category": one of ' + ", ".join(CATEGORIES) + "\n"
+                            '  "description_en": ONE clean English line under 90 '
+                            "characters keeping the location and the problem\n\n"
+                            "Use live_wire for any hanging, sparking, or exposed "
+                            "electrical cable. Use other only if nothing else fits.\n\n"
+                            f"Complaint: {raw_text}"
                         )
                     }]
                 }],
-                "generationConfig": {"maxOutputTokens": 100, "temperature": 0},
+                "generationConfig": {
+                    "maxOutputTokens": 800,
+                    "temperature": 0,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
             },
             timeout=12.0,
         )
         resp.raise_for_status()
         candidates = resp.json().get("candidates") or []
         if not candidates:
-            return None          # safety block or empty response
+            return None
         parts = candidates[0].get("content", {}).get("parts", [])
-        line = " ".join(p.get("text", "") for p in parts).strip()
-        return line or None
-    except Exception:
+        text = " ".join(p.get("text", "") for p in parts).strip()
+        text = re.sub(r"^```(?:json)?|```$", "", text.strip()).strip()
+        data = json.loads(text)
+
+        category = data.get("category")
+        if category not in CATEGORIES:
+            category = None
+        description = (data.get("description_en") or "").strip() or None
+        if not (category or description):
+            return None
+        result = {"category": category, "description_en": description}
+        _llm_cache[raw_text] = result
+        return result
+    except Exception as exc:
+        if os.environ.get("NAGARAI_DEBUG"):
+            print(f"  [llm] {type(exc).__name__}: {exc}")
         return None
 
 
@@ -343,10 +385,29 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
     raw_text = " ".join(raw_parts).strip()
     text_category, matched = classify_text(raw_text)
 
+    llm = llm_extract(raw_text) if (use_llm and raw_text) else None
+    llm_category = llm.get("category") if llm else None
+
     # Vision wins on category when it fired, because a photo of a pothole is
     # stronger evidence than the word "road" appearing in a sentence.
-    category = image_category or text_category
-    trace["category_source"] = "vision" if image_category else f"keywords:{matched or 'none'}"
+    # Precedence: a photo is the strongest evidence, then a language model that
+    # actually understands code-mixed Tamil, then the offline keyword table.
+    category = image_category or llm_category or text_category
+    trace["category_source"] = ("vision" if image_category
+                                else "llm" if llm_category
+                                else f"keywords:{matched or 'none'}")
+
+    # Modalities can disagree -- a photo of a pothole with a voice note about
+    # garbage. We still file ONE complaint, because the statement asks for any
+    # mix of modalities to produce one structured record. But we record the
+    # disagreement rather than silently discarding the losing signal: a wrong
+    # category feeds the deduplication category gate, so a misclassification
+    # becomes a mis-merge. A flagged complaint is one a ward officer can check.
+    secondary = None
+    rival = llm_category or (text_category if matched else None)
+    if image_category and rival and image_category != rival:
+        secondary = rival
+        trace["conflict"] = f"vision={image_category} vs text={rival}"
 
     severity = image_severity or estimate_severity(category, raw_text)
 
@@ -355,12 +416,10 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
     elif lat is None:
         trace["location"] = "text-only"
 
-    description = None
-    if use_llm and raw_text:
-        description = llm_normalise(raw_text, category)
-        if description:
-            trace["description"] = "llm"
-    if not description:
+    description = llm.get("description_en") if llm else None
+    if description:
+        trace["description"] = "llm"
+    else:
         description = clean_description(raw_text, category)
         trace.setdefault("description", "rule-based")
 
@@ -371,6 +430,7 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
         "transcript": transcript,
         "photo_url": os.path.basename(image_path) if image_path else None,
         "category": category,
+        "secondary_category": secondary,
         "severity": severity,
         "location_lat": lat,
         "location_lon": lon,

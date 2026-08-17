@@ -433,6 +433,130 @@
             font-size: 13px
         }
 
+        .conflict {
+            background: #FFF3D6;
+            color: var(--progress);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            padding: 2px 6px
+        }
+
+        .merges {
+            background: #F4F6F8;
+            border-left: 2px solid var(--civic);
+            padding: 7px 10px;
+            margin: 8px 0;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--ink-2)
+        }
+
+        .merges div {
+            padding: 2px 0
+        }
+
+        .merges b {
+            color: var(--ink)
+        }
+
+        .why {
+            margin-left: auto;
+            background: none;
+            border: 1px solid #4A5560;
+            color: #C6CED6;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: 2px;
+            cursor: pointer;
+            font-family: var(--sans)
+        }
+
+        .why:hover {
+            background: #4A5560;
+            color: #fff
+        }
+
+        .sheet {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(20, 22, 26, .55);
+            z-index: 1000;
+            padding: 40px 20px;
+            overflow-y: auto
+        }
+
+        .sheet.on {
+            display: block
+        }
+
+        .sheet-in {
+            max-width: 660px;
+            margin: 0 auto;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            padding: 22px
+        }
+
+        .sheet h2 {
+            margin: 0 0 3px;
+            font-size: 16px
+        }
+
+        .sheet h3 {
+            margin: 18px 0 7px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: .09em;
+            color: var(--muted)
+        }
+
+        .sheet .eq {
+            font-family: var(--mono);
+            font-size: 14px;
+            background: var(--ink);
+            color: var(--hazard);
+            padding: 11px 13px;
+            margin: 8px 0
+        }
+
+        .sheet dl {
+            margin: 0;
+            font-size: 13px
+        }
+
+        .sheet dt {
+            font-family: var(--mono);
+            font-weight: 600;
+            margin-top: 7px
+        }
+
+        .sheet dd {
+            margin: 0 0 0 22px;
+            color: var(--ink-2)
+        }
+
+        .sheet ul {
+            margin: 6px 0 0 18px;
+            padding: 0;
+            font-size: 13px;
+            color: var(--ink-2)
+        }
+
+        .sheet li {
+            margin: 4px 0
+        }
+
+        .sheet .close {
+            float: right;
+            background: none;
+            border: 1px solid var(--line);
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px
+        }
+
         @media(max-width:900px) {
             main {
                 grid-template-columns: 1fr;
@@ -464,7 +588,19 @@
         </div>
     </header>
 
-    <div class="backends" id="backends"></div>
+    <div class="backends" id="backends">
+        <button class="why" id="open-sheet">How ranking works</button>
+    </div>
+
+    <div class="sheet" id="sheet">
+        <div class="sheet-in">
+            <button class="close" onclick="document.getElementById('sheet').classList.remove('on')">Close</button>
+            <h2>How this queue is ranked</h2>
+            <p style="color:var(--muted);font-size:13px;margin:3px 0 0">
+                Nothing here is a black box. Every number on every card comes from this formula.</p>
+            <div id="sheet-body">Loading…</div>
+        </div>
+    </div>
 
     <main>
         <div id="map"></div>
@@ -533,17 +669,24 @@
             const p = c.priority;
             const mem = c.members.map(m =>
                 `<div class="member"><code>${m.id}</code> · S${m.severity}
-                    <div>${escapeHtml(m.raw_text)}</div>
-                    ${m.description_en !== m.raw_text
-                    ? `<div style="color:var(--civic);font-size:11px">→ ${escapeHtml(m.description_en)}</div>`
+       ${m.secondary_category
+                    ? `<span class="conflict">also reads as ${m.secondary_category.replace("_", " ")}</span>` : ""}
+       <div>${escapeHtml(m.raw_text)}</div>
+       ${m.description_en && m.description_en !== m.raw_text
+                    ? `<div style="color:var(--civic);font-size:11px">&rarr; ${escapeHtml(m.description_en)}</div>`
                     : ""}
-                </div>`).join("");
+     </div>`).join("");
+            const merges = (c.merges || []).length
+                ? `<div class="merges">${c.merges.map(m =>
+                    `<div><b>${m.merged[0]} + ${m.merged[1]}</b> &mdash; ${m.rule}<br>${escapeHtml(m.reason)}</div>`
+                ).join("")}</div>` : "";
             return `<article class="card ${c.hazard_lane ? "hz" : ""} ${selected === c.cluster_key ? "sel" : ""}
       ${c.status === "resolved" ? "done" : ""}" data-key="${c.cluster_key}">
     <div class="top">
       <span class="rank">#${c.rank}</span>
       <span class="cat">${c.category.replace("_", " ")}</span>
       <span class="pill ${c.status}">${c.status.replace("_", " ")}</span>
+      ${c.has_conflict ? `<span class="conflict">check</span>` : ""}
       <span class="score">${p.final_score}</span>
     </div>
     <div class="desc">${escapeHtml(c.description)}</div>
@@ -553,6 +696,7 @@
     <div class="detail">
       <div style="font-size:11px;color:var(--muted);margin-bottom:4px">
         Merged from ${c.members.length} complaint${c.members.length > 1 ? "s" : ""}</div>
+      ${merges}
       ${mem}
       <div class="actions">
         <button data-status="open">Reopen</button>
@@ -624,7 +768,8 @@
             document.getElementById("backends").innerHTML =
                 item("Embeddings", label || b.embeddings, !/TF-IDF/.test(label || b.embeddings))
                 + item("Speech", b.speech, b.speech !== "not loaded")
-                + item("Vision", b.vision, b.vision !== "keyword fallback");
+                + item("Vision", b.vision, b.vision !== "keyword fallback")
+                + (b.llm ? item("LLM", b.llm, !/no key/.test(b.llm)) : "");
         }
 
         async function load() {
@@ -671,6 +816,28 @@
             } catch (err) {
                 box.textContent = "Could not file: " + err.message;
             }
+        };
+
+        document.getElementById("open-sheet").onclick = async () => {
+            const sheet = document.getElementById("sheet");
+            sheet.classList.add("on");
+            try {
+                const d = await (await fetch(`${API}/api/formula`)).json();
+                document.getElementById("sheet-body").innerHTML =
+                    `<div class="eq">${escapeHtml(d.formula)}</div>
+       <h3>What each term means</h3>
+       <dl>${Object.entries(d.terms).map(([k, v]) =>
+                        `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl>
+       <h3>Lanes</h3>
+       <p style="font-size:13px;color:var(--ink-2);margin:0">${escapeHtml(d.lanes)}</p>
+       <h3>Why it can't be gamed</h3>
+       <ul>${d.gaming_resistance.map(g => `<li>${escapeHtml(g)}</li>`).join("")}</ul>`;
+            } catch (e) {
+                document.getElementById("sheet-body").textContent = "Could not load the formula.";
+            }
+        };
+        document.getElementById("sheet").onclick = e => {
+            if (e.target.id === "sheet") e.target.classList.remove("on");
         };
 
         load();

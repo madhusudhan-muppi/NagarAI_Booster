@@ -70,13 +70,17 @@ def build_queue():
             "lon": centre["location_lon"] if centre else None,
             "members": [
                 {"id": c["id"], "raw_text": c["raw_text"],
-                "description_en": c["description_en"],
-                "transcript": c.get("transcript"),
-                "severity": c["severity"], "photo_url": c.get("photo_url")}
+                 "description_en": c["description_en"],
+                 "secondary_category": c.get("secondary_category"),
+                 "transcript": c.get("transcript"),
+                 "severity": c["severity"], "photo_url": c.get("photo_url")}
                 for c in cl
             ],
             "affected_citizens": p["reporters"],
             "priority": p,
+            "merges": [m for m in merge_log
+                       if m["merged"][0] in {c["id"] for c in cl}],
+            "has_conflict": any(c.get("secondary_category") for c in cl),
             "status": state.get("status", "open"),
             "status_note": state.get("note", ""),
             "updated_at": state.get("updated_at"),
