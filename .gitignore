@@ -1,0 +1,23 @@
+
+# ML model weights -- download via download_models.sh instead
+*.pt
+*.bin
+*.onnx
+*.safetensors
+models/
+.cache/
+huggingface/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
