@@ -4,11 +4,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>NagarAI — Ward Console</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <title>NagarAI — File a Complaint</title>
     <style>
-        /* Municipal signage palette: the yellow is load-bearing, not decorative --
-     it marks the hazard lane and appears nowhere else. */
         :root {
             --ink: #14161A;
             --ink-2: #3A414A;
@@ -17,10 +14,10 @@
             --panel: #FFFFFF;
             --line: #C9D0D8;
             --hazard: #E8B004;
-            --hazard-ink: #4A3600;
             --civic: #1B4B8F;
             --resolved: #2F6B4F;
             --progress: #8A5A00;
+            --danger: #B4271F;
             --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
             --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         }
@@ -44,8 +41,7 @@
             padding: 14px 20px;
             display: flex;
             align-items: baseline;
-            gap: 22px;
-            flex-wrap: wrap
+            gap: 14px
         }
 
         header h1 {
@@ -66,250 +62,340 @@
             letter-spacing: .09em
         }
 
-        .stats {
+        .who {
             margin-left: auto;
-            display: flex;
-            gap: 20px;
-            font-family: var(--mono);
-            font-size: 12px
-        }
-
-        .stats b {
-            display: block;
-            font-size: 19px;
-            font-weight: 600;
-            color: var(--hazard)
-        }
-
-        .stats span {
-            color: #9AA5B1;
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: .07em
-        }
-
-        .backends {
-            background: var(--ink-2);
+            font-size: 12px;
             color: #C6CED6;
-            padding: 6px 20px;
-            font-family: var(--mono);
-            font-size: 11px;
             display: flex;
-            gap: 18px;
-            flex-wrap: wrap
+            align-items: center;
+            gap: 10px
         }
 
-        .backends i {
-            font-style: normal;
+        .logout {
+            background: none;
+            border: 1px solid #4A5560;
+            color: #C6CED6;
+            font-size: 11px;
+            padding: 5px 10px;
+            border-radius: 2px;
+            cursor: pointer;
+            font-family: var(--sans)
+        }
+
+        .logout:hover {
+            background: #4A5560;
             color: #fff
         }
 
-        .degraded {
-            color: var(--hazard)
-        }
-
         main {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 460px;
-            gap: 1px;
-            background: var(--line);
-            height: calc(100vh - 92px)
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 18px
         }
 
-        #map {
-            background: #dfe4e8
-        }
-
-        .queue {
-            background: var(--surface);
-            overflow-y: auto;
-            padding: 14px
-        }
-
-        .filters {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            margin-bottom: 12px
-        }
-
-        .filters button {
-            border: 1px solid var(--line);
-            background: var(--panel);
-            padding: 5px 11px;
-            border-radius: 2px;
-            cursor: pointer;
-            font-size: 12px;
-            font-family: var(--sans);
-            color: var(--ink-2)
-        }
-
-        .filters button[aria-pressed="true"] {
-            background: var(--ink);
-            color: #fff;
-            border-color: var(--ink)
-        }
-
-        .filters button:focus-visible {
-            outline: 2px solid var(--civic);
-            outline-offset: 1px
-        }
-
-        .lane {
-            margin: 16px 0 8px;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: .1em;
-            color: var(--muted);
-            display: flex;
-            align-items: center;
-            gap: 8px
-        }
-
-        .lane::after {
-            content: "";
-            flex: 1;
-            height: 1px;
-            background: var(--line)
-        }
-
-        .lane.hz {
-            color: var(--hazard-ink)
-        }
-
-        .card {
+        .panel {
             background: var(--panel);
             border: 1px solid var(--line);
-            border-left: 3px solid var(--civic);
-            padding: 12px 14px;
-            margin-bottom: 9px;
-            cursor: pointer
+            padding: 18px;
+            margin-bottom: 16px
         }
 
-        .card.hz {
-            border-left-color: var(--hazard);
-            background: #FFFDF5
+        .panel h2 {
+            margin: 0 0 3px;
+            font-size: 15px
         }
 
-        .card.sel {
-            outline: 2px solid var(--ink);
-            outline-offset: -1px
-        }
-
-        .card.done {
-            opacity: .55
-        }
-
-        .top {
-            display: flex;
-            align-items: baseline;
-            gap: 9px
-        }
-
-        .rank {
-            font-family: var(--mono);
-            font-size: 11px;
-            color: var(--muted)
-        }
-
-        .score {
-            font-family: var(--mono);
-            font-weight: 600;
-            font-size: 15px;
-            margin-left: auto
-        }
-
-        .cat {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: .08em;
-            background: var(--surface);
-            padding: 2px 6px;
-            color: var(--ink-2)
-        }
-
-        .desc {
-            margin: 7px 0 3px;
-            font-weight: 500
-        }
-
-        .meta {
+        .panel>p.hint {
+            margin: 0 0 14px;
             font-size: 12px;
             color: var(--muted)
         }
 
-        /* Signature element: the formula, with this cluster's real numbers in it.
-     Explainable prioritisation is 20% of the marks -- it belongs on the card,
-     not in an appendix. */
-        .formula {
-            font-family: var(--mono);
+        label {
+            display: block;
             font-size: 11px;
-            background: #F4F6F8;
-            border-top: 1px dashed var(--line);
-            margin: 9px -14px -12px;
-            padding: 8px 14px;
             color: var(--ink-2);
-            overflow-x: auto;
-            white-space: nowrap
+            margin: 10px 0 4px
         }
 
-        .formula b {
-            color: var(--ink);
-            font-weight: 600
-        }
-
-        .formula .op {
-            color: var(--muted)
-        }
-
-        .detail {
-            border-top: 1px solid var(--line);
-            margin-top: 9px;
-            padding-top: 9px;
-            display: none
-        }
-
-        .card.sel .detail {
-            display: block
-        }
-
-        .member {
-            font-size: 12px;
-            padding: 5px 0;
-            border-bottom: 1px dotted var(--line)
-        }
-
-        .member code {
-            font-family: var(--mono);
-            color: var(--civic);
-            font-size: 11px
-        }
-
-        .actions {
-            display: flex;
-            gap: 6px;
-            margin-top: 9px
-        }
-
-        .actions button {
-            flex: 1;
-            padding: 6px;
+        input,
+        textarea {
+            width: 100%;
+            padding: 8px;
             border: 1px solid var(--line);
-            background: var(--panel);
-            cursor: pointer;
-            font-size: 12px;
+            font-family: var(--sans);
+            font-size: 13px;
             border-radius: 2px
         }
 
-        .actions button:hover {
+        textarea {
+            height: 70px;
+            resize: vertical
+        }
+
+        .row {
+            display: flex;
+            gap: 8px
+        }
+
+        .row>div {
+            flex: 1
+        }
+
+        button {
+            font-family: var(--sans);
+            cursor: pointer
+        }
+
+        .primary {
+            width: 100%;
+            margin-top: 14px;
+            padding: 10px;
+            background: var(--civic);
+            color: #fff;
+            border: 0;
+            font-size: 14px;
+            border-radius: 2px;
+            font-weight: 600
+        }
+
+        .primary:disabled {
+            opacity: .55;
+            cursor: default
+        }
+
+        .secondary {
+            padding: 8px 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 2px;
+            font-size: 12px;
+            color: var(--ink-2)
+        }
+
+        .secondary:hover {
             background: var(--surface)
+        }
+
+        .loc-status {
+            font-size: 11px;
+            color: var(--civic);
+            margin: 6px 0 0;
+            min-height: 14px
+        }
+
+        .loc-wrap {
+            position: relative
+        }
+
+        .loc-suggest {
+            display: none;
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: calc(100% + 2px);
+            background: var(--panel);
+            border: 1px solid var(--line);
+            box-shadow: 0 6px 18px rgba(20, 22, 26, .12);
+            z-index: 20;
+            max-height: 220px;
+            overflow-y: auto
+        }
+
+        .loc-suggest.on {
+            display: block
+        }
+
+        .loc-suggest button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 8px 10px;
+            border: 0;
+            border-bottom: 1px solid var(--line);
+            background: var(--panel);
+            font-size: 12px;
+            color: var(--ink-2);
+            cursor: pointer
+        }
+
+        .loc-suggest button:last-child {
+            border-bottom: 0
+        }
+
+        .loc-suggest button:hover,
+        .loc-suggest button:focus-visible {
+            background: var(--surface)
+        }
+
+        .photobox {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap
+        }
+
+        .photobox .secondary {
+            flex: 1
+        }
+
+        .photo-preview-wrap {
+            width: 100%;
+            margin-top: 8px
+        }
+
+        .photo-thumb {
+            position: relative;
+            display: inline-block
+        }
+
+        .photo-thumb img {
+            max-width: 100%;
+            max-height: 160px;
+            display: block;
+            border: 1px solid var(--line)
+        }
+
+        .photo-thumb button {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            background: rgba(20, 22, 26, .7);
+            color: #fff;
+            border: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 12px;
+            line-height: 1
+        }
+
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 14px;
+            border: 1px solid var(--line);
+            border-radius: 2px;
+            overflow: hidden
+        }
+
+        .tabs button {
+            flex: 1;
+            padding: 8px;
+            border: 0;
+            background: var(--panel);
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        .tabs button.on {
+            background: var(--ink);
+            color: #fff
+        }
+
+        .err {
+            color: var(--danger);
+            font-size: 12px;
+            margin: 6px 0 0;
+            display: none
+        }
+
+        .voicebox {
+            border: 1px dashed var(--line);
+            padding: 10px;
+            margin-top: 4px;
+            border-radius: 2px
+        }
+
+        .rec-btn {
+            padding: 8px 14px;
+            border: 1px solid var(--civic);
+            background: var(--panel);
+            color: var(--civic);
+            border-radius: 2px;
+            font-size: 13px;
+            font-weight: 600
+        }
+
+        .rec-btn.on {
+            background: var(--danger);
+            border-color: var(--danger);
+            color: #fff
+        }
+
+        .rec-status {
+            font-size: 11px;
+            color: var(--muted);
+            margin-left: 8px
+        }
+
+        audio {
+            width: 100%;
+            margin-top: 8px;
+            display: none
+        }
+
+        .or {
+            font-size: 11px;
+            color: var(--muted);
+            margin: 10px 0 4px
+        }
+
+        .result {
+            margin-top: 12px;
+            font-size: 12px;
+            font-family: var(--mono);
+            background: #F4F6F8;
+            padding: 10px;
+            border-left: 2px solid var(--civic);
+            display: none;
+            white-space: pre-wrap
+        }
+
+        .result.on {
+            display: block
+        }
+
+        .result.bad {
+            border-left-color: var(--danger);
+            color: var(--danger)
+        }
+
+        .mine-item {
+            border-bottom: 1px solid var(--line);
+            padding: 10px 0
+        }
+
+        .mine-item:last-child {
+            border-bottom: 0
+        }
+
+        .mine-top {
+            display: flex;
+            gap: 8px;
+            align-items: baseline
+        }
+
+        .mine-id {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--muted)
+        }
+
+        .mine-cat {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            background: var(--surface);
+            padding: 2px 6px
         }
 
         .pill {
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: .07em;
-            padding: 2px 6px
+            padding: 2px 6px;
+            margin-left: auto
         }
 
         .pill.open {
@@ -327,251 +413,89 @@
             color: var(--resolved)
         }
 
-        .file {
-            position: fixed;
-            right: 18px;
-            bottom: 18px;
-            z-index: 900
+        .mine-desc {
+            margin-top: 4px
         }
 
-        .file>button {
-            background: var(--ink);
-            color: #fff;
-            border: 0;
-            padding: 11px 16px;
-            border-radius: 2px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 550
-        }
-
-        .form {
-            display: none;
-            position: fixed;
-            right: 18px;
-            bottom: 66px;
-            width: 330px;
-            z-index: 900;
-            background: var(--panel);
-            border: 1px solid var(--line);
-            padding: 14px;
-            box-shadow: 0 8px 28px rgba(20, 22, 26, .18)
-        }
-
-        .form.on {
-            display: block
-        }
-
-        .form h3 {
-            margin: 0 0 3px;
-            font-size: 13px
-        }
-
-        .form p {
-            margin: 0 0 10px;
+        .mine-affected {
             font-size: 11px;
-            color: var(--muted)
+            color: var(--muted);
+            margin-top: 2px
         }
 
-        .form label {
-            display: block;
-            font-size: 11px;
-            color: var(--ink-2);
-            margin: 8px 0 3px
-        }
-
-        .form textarea,
-        .form input {
-            width: 100%;
-            padding: 6px;
-            border: 1px solid var(--line);
-            font-family: var(--sans);
-            font-size: 12px;
+        .verify-box {
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: var(--surface);
             border-radius: 2px
         }
 
-        .form textarea {
-            height: 56px;
-            resize: vertical
+        .verify-q {
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 6px
         }
 
-        .row {
+        .verify-row {
             display: flex;
-            gap: 6px
+            gap: 14px;
+            font-size: 12px;
+            margin-bottom: 6px
         }
 
-        .send {
-            width: 100%;
-            margin-top: 10px;
-            padding: 8px;
+        .verify-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin: 0;
+            font-size: 12px;
+            color: var(--ink-2)
+        }
+
+        .verify-photo {
+            font-size: 11px;
+            margin-bottom: 6px
+        }
+
+        .verify-submit {
+            padding: 6px 12px;
             background: var(--civic);
             color: #fff;
             border: 0;
-            cursor: pointer;
-            font-size: 13px;
-            border-radius: 2px
+            border-radius: 2px;
+            font-size: 12px
         }
 
-        .result {
-            margin-top: 9px;
+        .verify-mine {
+            margin-top: 8px;
+            padding: 6px 10px;
+            background: #E4F0E9;
+            border-radius: 2px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px
+        }
+
+        .verify-mine.dispute {
+            background: #FDECEC
+        }
+
+        .verify-update {
+            margin-left: auto;
+            background: none;
+            border: 1px solid var(--line);
+            border-radius: 2px;
             font-size: 11px;
-            font-family: var(--mono);
-            background: #F4F6F8;
-            padding: 8px;
-            border-left: 2px solid var(--civic);
-            display: none
-        }
-
-        .result.on {
-            display: block
+            padding: 3px 8px;
+            color: var(--ink-2)
         }
 
         .empty {
-            padding: 34px 14px;
+            padding: 20px 0;
             text-align: center;
             color: var(--muted);
             font-size: 13px
-        }
-
-        .conflict {
-            background: #FFF3D6;
-            color: var(--progress);
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: .07em;
-            padding: 2px 6px
-        }
-
-        .merges {
-            background: #F4F6F8;
-            border-left: 2px solid var(--civic);
-            padding: 7px 10px;
-            margin: 8px 0;
-            font-family: var(--mono);
-            font-size: 11px;
-            color: var(--ink-2)
-        }
-
-        .merges div {
-            padding: 2px 0
-        }
-
-        .merges b {
-            color: var(--ink)
-        }
-
-        .why {
-            margin-left: auto;
-            background: none;
-            border: 1px solid #4A5560;
-            color: #C6CED6;
-            font-size: 11px;
-            padding: 3px 9px;
-            border-radius: 2px;
-            cursor: pointer;
-            font-family: var(--sans)
-        }
-
-        .why:hover {
-            background: #4A5560;
-            color: #fff
-        }
-
-        .sheet {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(20, 22, 26, .55);
-            z-index: 1000;
-            padding: 40px 20px;
-            overflow-y: auto
-        }
-
-        .sheet.on {
-            display: block
-        }
-
-        .sheet-in {
-            max-width: 660px;
-            margin: 0 auto;
-            background: var(--panel);
-            border: 1px solid var(--line);
-            padding: 22px
-        }
-
-        .sheet h2 {
-            margin: 0 0 3px;
-            font-size: 16px
-        }
-
-        .sheet h3 {
-            margin: 18px 0 7px;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: .09em;
-            color: var(--muted)
-        }
-
-        .sheet .eq {
-            font-family: var(--mono);
-            font-size: 14px;
-            background: var(--ink);
-            color: var(--hazard);
-            padding: 11px 13px;
-            margin: 8px 0
-        }
-
-        .sheet dl {
-            margin: 0;
-            font-size: 13px
-        }
-
-        .sheet dt {
-            font-family: var(--mono);
-            font-weight: 600;
-            margin-top: 7px
-        }
-
-        .sheet dd {
-            margin: 0 0 0 22px;
-            color: var(--ink-2)
-        }
-
-        .sheet ul {
-            margin: 6px 0 0 18px;
-            padding: 0;
-            font-size: 13px;
-            color: var(--ink-2)
-        }
-
-        .sheet li {
-            margin: 4px 0
-        }
-
-        .sheet .close {
-            float: right;
-            background: none;
-            border: 1px solid var(--line);
-            padding: 4px 10px;
-            cursor: pointer;
-            border-radius: 2px
-        }
-
-        @media(max-width:900px) {
-            main {
-                grid-template-columns: 1fr;
-                height: auto
-            }
-
-            #map {
-                height: 44vh
-            }
-        }
-
-        @media(prefers-reduced-motion:reduce) {
-            * {
-                transition: none !important
-            }
         }
     </style>
 </head>
@@ -580,132 +504,90 @@
 
     <header>
         <h1>Nagar<span>AI</span></h1>
-        <div class="tag">Ward complaint console</div>
-        <div class="stats">
-            <div><b id="s-complaints">—</b><span>Complaints in</span></div>
-            <div><b id="s-clusters">—</b><span>Distinct issues</span></div>
-            <div><b id="s-merged">—</b><span>Duplicates merged</span></div>
+        <div class="tag">Citizen intake</div>
+        <div class="who" id="who" style="display:none">
+            <span id="who-name"></span>
+            <button class="logout" id="logout">Sign out</button>
         </div>
     </header>
 
-    <div class="backends" id="backends">
-        <button class="why" id="open-sheet">How ranking works</button>
-    </div>
-
-    <div class="sheet" id="sheet">
-        <div class="sheet-in">
-            <button class="close" onclick="document.getElementById('sheet').classList.remove('on')">Close</button>
-            <h2>How this queue is ranked</h2>
-            <p style="color:var(--muted);font-size:13px;margin:3px 0 0">
-                Nothing here is a black box. Every number on every card comes from this formula.</p>
-            <div id="sheet-body">Loading…</div>
-        </div>
-    </div>
-
     <main>
-        <div id="map"></div>
-        <div class="queue">
-            <div class="filters" id="filters"></div>
-            <div id="list">
-                <div class="empty">Loading queue…</div>
+        <div class="panel" id="auth-panel">
+            <div class="tabs">
+                <button class="on" id="tab-login">Sign in</button>
+                <button id="tab-signup">Create account</button>
+            </div>
+            <div id="auth-fields">
+                <label for="a-user">Username</label>
+                <input id="a-user" autocomplete="username">
+                <label for="a-pass">Password</label>
+                <input id="a-pass" type="password" autocomplete="current-password">
+                <div class="err" id="auth-err"></div>
+                <button class="primary" id="auth-submit">Sign in</button>
+            </div>
+        </div>
+
+        <div id="app" style="display:none">
+            <div class="panel">
+                <h2>File a complaint</h2>
+                <p class="hint">Type in any language, attach a photo, or record a voice note. Send whatever you
+                    have — even just one.</p>
+
+                <label for="f-text">What is the problem?</label>
+                <textarea id="f-text" placeholder="e.g. வேளச்சேரி பஸ் ஸ்டாண்ட் அருகில் பெரிய குழி"></textarea>
+
+                <label for="f-loc">Landmark or area</label>
+                <div class="loc-wrap">
+                    <input id="f-loc" placeholder="e.g. Velachery" autocomplete="off">
+                    <div class="loc-suggest" id="loc-suggest"></div>
+                </div>
+                <p class="hint" style="margin:3px 0 0">Start typing and pick your spot from the list — that's
+                    what puts you on the map precisely. No coordinates needed.</p>
+
+                <button type="button" class="secondary" id="geo-btn" style="margin-top:8px">📍 Or use my current
+                    location instead</button>
+                <div class="loc-status" id="loc-status"></div>
+                <input type="hidden" id="f-lat">
+                <input type="hidden" id="f-lon">
+
+                <label>Photo</label>
+                <div class="photobox">
+                    <button type="button" class="secondary" id="photo-camera-btn">📷 Take photo</button>
+                    <button type="button" class="secondary" id="photo-upload-btn">🖼️ Upload photo</button>
+                    <input type="file" id="f-photo-camera" accept="image/*" capture="environment" hidden>
+                    <input type="file" id="f-photo-upload" accept="image/*" hidden>
+                    <div class="photo-preview-wrap" id="photo-preview-wrap"></div>
+                </div>
+
+                <label>Voice note</label>
+                <div class="voicebox">
+                    <button type="button" class="rec-btn" id="rec-btn">🎤 Record</button>
+                    <span class="rec-status" id="rec-status"></span>
+                    <audio id="rec-preview" controls></audio>
+                    <div class="or">— or —</div>
+                    <input type="file" id="f-audio" accept="audio/*">
+                </div>
+
+                <button class="primary" id="send">Submit complaint</button>
+                <div class="result" id="result"></div>
+            </div>
+
+            <div class="panel">
+                <h2>My complaints</h2>
+                <p class="hint">Status updates as a ward officer works your issue.</p>
+                <div id="mine"><div class="empty">Loading…</div></div>
             </div>
         </div>
     </main>
 
-    <div class="file">
-        <button onclick="document.getElementById('form').classList.toggle('on')">File a complaint</button>
-    </div>
-
-    <div class="form" id="form">
-        <h3>File a complaint</h3>
-        <p>Type in any language, attach a photo, or record a voice note.</p>
-        <label for="f-text">What is the problem?</label>
-        <textarea id="f-text" placeholder="e.g. வேளச்சேரி பஸ் ஸ்டாண்ட் அருகில் பெரிய குழி"></textarea>
-        <label for="f-loc">Landmark</label>
-        <input id="f-loc" placeholder="Velachery bus stand">
-        <div class="row">
-            <div style="flex:1"><label for="f-lat">Latitude</label><input id="f-lat" placeholder="12.9689"></div>
-            <div style="flex:1"><label for="f-lon">Longitude</label><input id="f-lon" placeholder="80.2392"></div>
-        </div>
-        <label for="f-photo">Photo</label><input type="file" id="f-photo" accept="image/*">
-        <label for="f-audio">Voice note</label><input type="file" id="f-audio" accept="audio/*">
-        <button class="send" id="send">Submit complaint</button>
-        <div class="result" id="result"></div>
-    </div>
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         const API = "";
-        let clusters = [], filter = "all", selected = null, markers = {};
+        const TOKEN_KEY = "nagarai_citizen_token";
+        const NAME_KEY = "nagarai_citizen_name";
 
-        const map = L.map("map").setView([12.98, 80.23], 12);
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-            { attribution: "© OpenStreetMap", maxZoom: 19 }).addTo(map);
-
-        const LANE_COLOR = { hazard: "#E8B004", routine: "#1B4B8F", resolved: "#2F6B4F" };
-
-        function pin(c) {
-            const color = c.status === "resolved" ? LANE_COLOR.resolved
-                : c.hazard_lane ? LANE_COLOR.hazard : LANE_COLOR.routine;
-            const size = 20 + Math.min(c.affected_citizens * 5, 18);
-            return L.divIcon({
-                className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-                html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
-      background:${color};border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.4);
-      display:flex;align-items:center;justify-content:center;color:${c.hazard_lane ? "#4A3600" : "#fff"};
-      font:600 11px ui-monospace,monospace">${c.affected_citizens}</div>`
-            });
-        }
-
-        function formulaStrip(p) {
-            return `<b>${p.severity_component}</b><span class="op"> = ${p.severity}²</span>`
-                + `<span class="op"> × </span><b>${p.headcount_component}</b><span class="op"> = 1+ln ${p.reporters}</span>`
-                + `<span class="op"> × </span><b>${p.ageing_component}</b><span class="op"> = 1+${p.days_pending}/7</span>`
-                + `<span class="op"> × </span><b>${p.proximity_component}</b>`
-                + `<span class="op"> → </span><b>${p.final_score}</b>`;
-        }
-
-        function card(c) {
-            const p = c.priority;
-            const mem = c.members.map(m =>
-                `<div class="member"><code>${m.id}</code> · S${m.severity}
-       ${m.secondary_category
-                    ? `<span class="conflict">also reads as ${m.secondary_category.replace("_", " ")}</span>` : ""}
-       <div>${escapeHtml(m.raw_text)}</div>
-       ${m.description_en && m.description_en !== m.raw_text
-                    ? `<div style="color:var(--civic);font-size:11px">&rarr; ${escapeHtml(m.description_en)}</div>`
-                    : ""}
-     </div>`).join("");
-            const merges = (c.merges || []).length
-                ? `<div class="merges">${c.merges.map(m =>
-                    `<div><b>${m.merged[0]} + ${m.merged[1]}</b> &mdash; ${m.rule}<br>${escapeHtml(m.reason)}</div>`
-                ).join("")}</div>` : "";
-            return `<article class="card ${c.hazard_lane ? "hz" : ""} ${selected === c.cluster_key ? "sel" : ""}
-      ${c.status === "resolved" ? "done" : ""}" data-key="${c.cluster_key}">
-    <div class="top">
-      <span class="rank">#${c.rank}</span>
-      <span class="cat">${c.category.replace("_", " ")}</span>
-      <span class="pill ${c.status}">${c.status.replace("_", " ")}</span>
-      ${c.has_conflict ? `<span class="conflict">check</span>` : ""}
-      <span class="score">${p.final_score}</span>
-    </div>
-    <div class="desc">${escapeHtml(c.description)}</div>
-    <div class="meta">${c.affected_citizens} ${c.affected_citizens === 1 ? "citizen" : "citizens"} affected
-      · ${p.days_pending}d pending${c.location_text ? " · " + escapeHtml(c.location_text) : ""}
-      ${p.proximity_site ? `<br>Near ${escapeHtml(p.proximity_site)} — ×${p.proximity_component}` : ""}</div>
-    <div class="detail">
-      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">
-        Merged from ${c.members.length} complaint${c.members.length > 1 ? "s" : ""}</div>
-      ${merges}
-      ${mem}
-      <div class="actions">
-        <button data-status="open">Reopen</button>
-        <button data-status="in_progress">Assign crew</button>
-        <button data-status="resolved">Mark resolved</button>
-      </div>
-    </div>
-    <div class="formula">${formulaStrip(p)}</div>
-  </article>`;
+        function token() { return localStorage.getItem(TOKEN_KEY); }
+        function authHeaders(extra) {
+            return Object.assign({ "Authorization": "Bearer " + token() }, extra || {});
         }
 
         function escapeHtml(s) {
@@ -713,135 +595,361 @@
                 ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
         }
 
-        function render() {
-            const shown = clusters.filter(c => filter === "all" || c.category === filter);
-            const hz = shown.filter(c => c.hazard_lane), rt = shown.filter(c => !c.hazard_lane);
-            const list = document.getElementById("list");
+        // ---------------------------------------------------------------
+        // Auth
+        // ---------------------------------------------------------------
 
-            list.innerHTML =
-                (hz.length ? `<div class="lane hz">Hazard lane — worked first</div>` + hz.map(card).join("") : "")
-                + (rt.length ? `<div class="lane">Routine lane — by priority score</div>` + rt.map(card).join("") : "")
-                || `<div class="empty">No complaints in this category.</div>`;
+        let mode = "login";
+        document.getElementById("tab-login").onclick = () => setMode("login");
+        document.getElementById("tab-signup").onclick = () => setMode("signup");
 
-            list.querySelectorAll(".card").forEach(el => {
-                el.onclick = e => {
-                    if (e.target.dataset.status) return;
-                    selected = selected === el.dataset.key ? null : el.dataset.key;
-                    render();
-                    const c = clusters.find(x => x.cluster_key === el.dataset.key);
-                    if (c && c.lat) map.setView([c.lat, c.lon], 15);
-                };
-                el.querySelectorAll("[data-status]").forEach(b => {
-                    b.onclick = async ev => {
-                        ev.stopPropagation();
-                        await fetch(`${API}/api/clusters/${el.dataset.key}/status`, {
-                            method: "POST", headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ status: b.dataset.status })
-                        });
-                        load();
-                    };
-                });
-            });
-
-            Object.values(markers).forEach(m => map.removeLayer(m));
-            markers = {};
-            shown.filter(c => c.lat != null).forEach(c => {
-                const m = L.marker([c.lat, c.lon], { icon: pin(c) }).addTo(map);
-                m.bindPopup(`<b>${escapeHtml(c.description)}</b><br>
-      Score ${c.priority.final_score} · ${c.affected_citizens} affected`);
-                m.on("click", () => { selected = c.cluster_key; render(); });
-                markers[c.cluster_key] = m;
-            });
+        function setMode(m) {
+            mode = m;
+            document.getElementById("tab-login").classList.toggle("on", m === "login");
+            document.getElementById("tab-signup").classList.toggle("on", m === "signup");
+            document.getElementById("auth-submit").textContent = m === "login" ? "Sign in" : "Create account";
+            document.getElementById("auth-err").style.display = "none";
         }
 
-        function renderFilters() {
-            const cats = ["all", ...new Set(clusters.map(c => c.category))];
-            document.getElementById("filters").innerHTML = cats.map(c =>
-                `<button aria-pressed="${filter === c}" data-cat="${c}">${c.replace("_", " ")}</button>`).join("");
-            document.querySelectorAll("#filters button").forEach(b =>
-                b.onclick = () => { filter = b.dataset.cat; renderFilters(); render(); });
-        }
-
-        function renderBackends(b, label) {
-            const item = (name, val, ok) =>
-                `${name}: <i class="${ok ? "" : "degraded"}">${val}</i>`;
-            document.getElementById("backends").innerHTML =
-                item("Embeddings", label || b.embeddings, !/TF-IDF/.test(label || b.embeddings))
-                + item("Speech", b.speech, b.speech !== "not loaded")
-                + item("Vision", b.vision, b.vision !== "keyword fallback")
-                + (b.llm ? item("LLM", b.llm, !/no key/.test(b.llm)) : "");
-        }
-
-        async function load() {
+        document.getElementById("auth-submit").onclick = async () => {
+            const username = document.getElementById("a-user").value.trim();
+            const password = document.getElementById("a-pass").value;
+            const err = document.getElementById("auth-err");
+            err.style.display = "none";
+            const path = mode === "login" ? "/api/auth/login" : "/api/auth/signup";
             try {
-                const r = await fetch(`${API}/api/clusters`);
+                const r = await fetch(`${API}${path}`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password })
+                });
                 const d = await r.json();
-                clusters = d.clusters;
-                document.getElementById("s-complaints").textContent = d.stats.complaints;
-                document.getElementById("s-clusters").textContent = d.stats.clusters;
-                document.getElementById("s-merged").textContent = d.stats.merged;
-                renderBackends(d.backends, d.stats.embedding_backend);
-                renderFilters(); render();
+                if (!r.ok) throw new Error(d.detail || "Could not sign in");
+                localStorage.setItem(TOKEN_KEY, d.token);
+                localStorage.setItem(NAME_KEY, username);
+                showApp();
             } catch (e) {
-                document.getElementById("list").innerHTML =
-                    `<div class="empty">Cannot reach the API. Start it with
-       <code>uvicorn backend.main:app --reload</code> and reload this page.</div>`;
+                err.textContent = e.message;
+                err.style.display = "block";
             }
+        };
+
+        document.getElementById("logout").onclick = () => {
+            localStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(NAME_KEY);
+            showAuth();
+        };
+
+        function showAuth() {
+            document.getElementById("auth-panel").style.display = "block";
+            document.getElementById("app").style.display = "none";
+            document.getElementById("who").style.display = "none";
         }
+
+        function showApp() {
+            document.getElementById("auth-panel").style.display = "none";
+            document.getElementById("app").style.display = "block";
+            document.getElementById("who").style.display = "flex";
+            document.getElementById("who-name").textContent = localStorage.getItem(NAME_KEY) || "";
+            loadMine();
+        }
+
+        // ---------------------------------------------------------------
+        // Geolocation
+        // ---------------------------------------------------------------
+
+        document.getElementById("geo-btn").onclick = () => {
+            const status = document.getElementById("loc-status");
+            if (!navigator.geolocation) {
+                status.textContent = "Location isn't supported in this browser — type a landmark instead.";
+                return;
+            }
+            const btn = document.getElementById("geo-btn");
+            status.textContent = "Locating…";
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    document.getElementById("f-lat").value = pos.coords.latitude.toFixed(6);
+                    document.getElementById("f-lon").value = pos.coords.longitude.toFixed(6);
+                    status.textContent = "📍 Your current location will be used — the landmark field above is optional now.";
+                },
+                () => { status.textContent = "Couldn't get your location — type a landmark instead."; },
+                { enableHighAccuracy: true, timeout: 8000 }
+            );
+        };
+
+        // ---------------------------------------------------------------
+        // Landmark autocomplete -- picking a suggestion attaches real lat/lon,
+        // which is what makes dedup match on location instead of falling back
+        // to the much weaker text-only comparison for ambiguous names.
+        // ---------------------------------------------------------------
+
+        let locDebounce = null;
+        document.getElementById("f-loc").addEventListener("input", e => {
+            document.getElementById("f-lat").value = "";
+            document.getElementById("f-lon").value = "";
+            document.getElementById("loc-status").textContent = "";
+            clearTimeout(locDebounce);
+            const q = e.target.value.trim();
+            const box = document.getElementById("loc-suggest");
+            if (q.length < 3) { box.classList.remove("on"); return; }
+            locDebounce = setTimeout(async () => {
+                try {
+                    const r = await fetch(`${API}/api/geocode?q=${encodeURIComponent(q)}`,
+                        { headers: authHeaders() });
+                    const d = await r.json();
+                    if (!d.results || !d.results.length) { box.classList.remove("on"); return; }
+                    box.innerHTML = d.results.map((res, i) =>
+                        `<button type="button" data-i="${i}">${escapeHtml(res.label)}</button>`).join("");
+                    box.classList.add("on");
+                    box.querySelectorAll("button").forEach(b => b.onclick = () => {
+                        const res = d.results[b.dataset.i];
+                        document.getElementById("f-loc").value = res.label.split(",").slice(0, 2).join(",");
+                        document.getElementById("f-lat").value = res.lat;
+                        document.getElementById("f-lon").value = res.lon;
+                        document.getElementById("loc-status").textContent = "📍 Location set precisely.";
+                        box.classList.remove("on");
+                    });
+                } catch (e) { box.classList.remove("on"); }
+            }, 400);
+        });
+        document.addEventListener("click", e => {
+            if (!e.target.closest(".loc-wrap")) document.getElementById("loc-suggest").classList.remove("on");
+        });
+
+        // ---------------------------------------------------------------
+        // Photo -- separate take/upload buttons, one shared preview
+        // ---------------------------------------------------------------
+
+        let selectedPhoto = null;
+
+        function setPhoto(file) {
+            selectedPhoto = file || null;
+            const wrap = document.getElementById("photo-preview-wrap");
+            if (!selectedPhoto) { wrap.innerHTML = ""; return; }
+            wrap.innerHTML = `<div class="photo-thumb">
+        <img src="${URL.createObjectURL(selectedPhoto)}" alt="attached photo">
+        <button type="button" id="photo-remove" aria-label="Remove photo">✕</button>
+      </div>`;
+            document.getElementById("photo-remove").onclick = () => setPhoto(null);
+        }
+
+        document.getElementById("photo-camera-btn").onclick = () =>
+            document.getElementById("f-photo-camera").click();
+        document.getElementById("photo-upload-btn").onclick = () =>
+            document.getElementById("f-photo-upload").click();
+        document.getElementById("f-photo-camera").onchange = e => setPhoto(e.target.files[0]);
+        document.getElementById("f-photo-upload").onchange = e => setPhoto(e.target.files[0]);
+
+        // ---------------------------------------------------------------
+        // In-browser voice recording -- MediaRecorder, no upload needed
+        // ---------------------------------------------------------------
+
+        let mediaRecorder = null, recordedChunks = [], recordedBlob = null, micStream = null;
+
+        document.getElementById("rec-btn").onclick = async () => {
+            const btn = document.getElementById("rec-btn");
+            const status = document.getElementById("rec-status");
+
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                mediaRecorder.stop();
+                return;
+            }
+            if (!navigator.mediaDevices || !window.MediaRecorder) {
+                status.textContent = "Recording not supported in this browser — use the file upload below.";
+                return;
+            }
+            try {
+                micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (e) {
+                status.textContent = "Microphone access denied.";
+                return;
+            }
+            recordedChunks = [];
+            const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+                ? "audio/webm;codecs=opus"
+                : (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus") ? "audio/ogg;codecs=opus" : "");
+            mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType } : undefined);
+            mediaRecorder.ondataavailable = e => { if (e.data.size) recordedChunks.push(e.data); };
+            mediaRecorder.onstop = () => {
+                micStream.getTracks().forEach(t => t.stop());
+                recordedBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+                const preview = document.getElementById("rec-preview");
+                preview.src = URL.createObjectURL(recordedBlob);
+                preview.style.display = "block";
+                btn.textContent = "🎤 Record again";
+                btn.classList.remove("on");
+                status.textContent = `Recorded (${(recordedBlob.size / 1024).toFixed(0)} KB)`;
+            };
+            mediaRecorder.start();
+            btn.textContent = "⏹ Stop recording";
+            btn.classList.add("on");
+            status.textContent = "Recording…";
+        };
+
+        // ---------------------------------------------------------------
+        // Submit
+        // ---------------------------------------------------------------
 
         document.getElementById("send").onclick = async () => {
-            const fd = new FormData();
             const g = id => document.getElementById(id);
+            const fd = new FormData();
             fd.append("text", g("f-text").value);
             if (g("f-loc").value) fd.append("location_text", g("f-loc").value);
             if (g("f-lat").value) fd.append("lat", g("f-lat").value);
             if (g("f-lon").value) fd.append("lon", g("f-lon").value);
-            if (g("f-photo").files[0]) fd.append("photo", g("f-photo").files[0]);
-            if (g("f-audio").files[0]) fd.append("audio", g("f-audio").files[0]);
+            if (selectedPhoto) fd.append("photo", selectedPhoto);
+
+            if (recordedBlob) {
+                const ext = recordedBlob.type.includes("ogg") ? "ogg" : "webm";
+                fd.append("audio", recordedBlob, `recording.${ext}`);
+            } else if (g("f-audio").files[0]) {
+                fd.append("audio", g("f-audio").files[0]);
+            }
 
             const box = g("result");
             box.className = "result on";
             box.textContent = "Processing…";
+            const btn = g("send");
+            btn.disabled = true;
             try {
-                const r = await fetch(`${API}/api/complaints`, { method: "POST", body: fd });
+                const r = await fetch(`${API}/api/complaints`, {
+                    method: "POST", headers: authHeaders(), body: fd
+                });
                 const d = await r.json();
+                if (r.status === 429) {
+                    box.className = "result on";
+                    box.textContent = d.detail;
+                    loadMine();
+                    return;
+                }
                 if (!r.ok) throw new Error(d.detail || "Rejected");
-                box.innerHTML = `<b>${d.complaint.id}</b> → ${d.complaint.category} · S${d.complaint.severity}<br>`
-                    + `${d.merged_into_existing
-                        ? `Merged into <b>${d.cluster_key}</b> — now ${d.affected_citizens} citizens affected`
-                        : "Filed as a new issue"}<br>`
-                    + Object.entries(d.trace).map(([k, v]) => `${k}: ${v}`).join("<br>");
-                g("f-text").value = "";
-                load();
+                box.className = "result on";
+                box.textContent = `${d.complaint.id} → ${d.complaint.category} (severity ${d.complaint.severity})\n`
+                    + (d.merged_into_existing
+                        ? `Merged into an existing issue — now ${d.affected_citizens} citizens affected`
+                        : "Filed as a new issue")
+                    + "\n" + Object.entries(d.trace).map(([k, v]) => `${k}: ${v}`).join("\n");
+                g("f-text").value = ""; g("f-loc").value = "";
+                g("f-lat").value = ""; g("f-lon").value = "";
+                g("loc-status").textContent = "";
+                g("f-photo-camera").value = ""; g("f-photo-upload").value = "";
+                setPhoto(null);
+                g("f-audio").value = "";
+                recordedBlob = null;
+                g("rec-preview").style.display = "none";
+                g("rec-status").textContent = "";
+                loadMine();
             } catch (err) {
+                box.className = "result on bad";
                 box.textContent = "Could not file: " + err.message;
+            } finally {
+                btn.disabled = false;
             }
         };
 
-        document.getElementById("open-sheet").onclick = async () => {
-            const sheet = document.getElementById("sheet");
-            sheet.classList.add("on");
+        // ---------------------------------------------------------------
+        // My complaints, plus "is it fixed?" verification once resolved
+        // ---------------------------------------------------------------
+
+        // Browser-tab notifications only -- there is no server push channel for
+        // web citizens (see backend/notify.py). This fires while the tab is
+        // open and polling; it will not wake a closed tab, and we don't claim
+        // it does.
+        const SEEN_KEY = "nagarai_seen_status";
+        function seenStatus() { return JSON.parse(localStorage.getItem(SEEN_KEY) || "{}"); }
+        function notifyIfNewlyResolved(complaints) {
+            if (!("Notification" in window)) return;
+            const seen = seenStatus();
+            complaints.forEach(c => {
+                if (c.status === "resolved" && seen[c.id] && seen[c.id] !== "resolved"
+                    && Notification.permission === "granted") {
+                    new Notification("Complaint resolved", {
+                        body: `${c.id}: ${c.description_en || c.raw_text}`
+                    });
+                }
+                seen[c.id] = c.status;
+            });
+            localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+        }
+
+        const forceReverify = new Set();
+
+        function verifyBlock(c) {
+            if (c.status !== "resolved") return "";
+            if (c.my_verification && !forceReverify.has(c.cluster_key)) {
+                const v = c.my_verification;
+                return `<div class="verify-mine ${v.confirmed ? "ok" : "dispute"}">
+          You reported: <b>${v.confirmed ? "Fixed" : "Still not fixed"}</b>
+          <button type="button" class="verify-update" data-cluster="${c.cluster_key}">Update</button>
+        </div>`;
+            }
+            return `<div class="verify-box" data-cluster="${c.cluster_key}">
+        <div class="verify-q">Is it fixed?</div>
+        <div class="verify-row">
+          <label><input type="radio" name="v-${c.cluster_key}" value="yes" checked> Yes</label>
+          <label><input type="radio" name="v-${c.cluster_key}" value="no"> No</label>
+        </div>
+        <input type="file" class="verify-photo" accept="image/*" capture="environment">
+        <button type="button" class="verify-submit" data-cluster="${c.cluster_key}">Submit</button>
+      </div>`;
+        }
+
+        async function loadMine() {
+            const box = document.getElementById("mine");
             try {
-                const d = await (await fetch(`${API}/api/formula`)).json();
-                document.getElementById("sheet-body").innerHTML =
-                    `<div class="eq">${escapeHtml(d.formula)}</div>
-       <h3>What each term means</h3>
-       <dl>${Object.entries(d.terms).map(([k, v]) =>
-                        `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl>
-       <h3>Lanes</h3>
-       <p style="font-size:13px;color:var(--ink-2);margin:0">${escapeHtml(d.lanes)}</p>
-       <h3>Why it can't be gamed</h3>
-       <ul>${d.gaming_resistance.map(g => `<li>${escapeHtml(g)}</li>`).join("")}</ul>`;
-            } catch (e) {
-                document.getElementById("sheet-body").textContent = "Could not load the formula.";
-            }
-        };
-        document.getElementById("sheet").onclick = e => {
-            if (e.target.id === "sheet") e.target.classList.remove("on");
-        };
+                const r = await fetch(`${API}/api/mine`, { headers: authHeaders() });
+                if (r.status === 401) { showAuth(); return; }
+                const d = await r.json();
+                notifyIfNewlyResolved(d.complaints);
+                if (!d.complaints.length) {
+                    box.innerHTML = `<div class="empty">No complaints filed yet.</div>`;
+                    return;
+                }
+                box.innerHTML = d.complaints.map(c => `
+          <div class="mine-item">
+            <div class="mine-top">
+              <span class="mine-id">${c.id}</span>
+              <span class="mine-cat">${c.category.replace("_", " ")}</span>
+              <span class="pill ${c.status}">${c.status.replace("_", " ")}</span>
+            </div>
+            <div class="mine-desc">${escapeHtml(c.description_en || c.raw_text)}</div>
+            <div class="mine-affected">${c.affected_citizens} ${c.affected_citizens === 1 ? "citizen" : "citizens"} affected in this cluster
+              ${c.status_note ? " · " + escapeHtml(c.status_note) : ""}</div>
+            ${verifyBlock(c)}
+          </div>`).join("");
 
-        load();
-        setInterval(load, 5000);
+                box.querySelectorAll(".verify-update").forEach(btn => btn.onclick = () => {
+                    forceReverify.add(btn.dataset.cluster);
+                    loadMine();
+                });
+                box.querySelectorAll(".verify-submit").forEach(btn => btn.onclick = async () => {
+                    const key = btn.dataset.cluster;
+                    const wrap = btn.closest(".verify-box");
+                    const confirmed = wrap.querySelector(`input[name="v-${key}"]:checked`).value;
+                    const photo = wrap.querySelector(".verify-photo").files[0];
+                    const fd = new FormData();
+                    fd.append("confirmed", confirmed === "yes" ? "true" : "false");
+                    if (photo) fd.append("photo", photo);
+                    btn.disabled = true;
+                    try {
+                        await fetch(`${API}/api/clusters/${key}/verify`, {
+                            method: "POST", headers: authHeaders(), body: fd
+                        });
+                        forceReverify.delete(key);
+                        loadMine();
+                    } catch (e) {
+                        btn.disabled = false;
+                    }
+                });
+            } catch (e) {
+                box.innerHTML = `<div class="empty">Cannot reach the API right now.</div>`;
+            }
+        }
+
+        if (token()) { showApp(); } else { showAuth(); }
+        if ("Notification" in window && Notification.permission === "default") {
+            Notification.requestPermission();
+        }
+        setInterval(() => { if (token()) loadMine(); }, 8000);
     </script>
 </body>
 

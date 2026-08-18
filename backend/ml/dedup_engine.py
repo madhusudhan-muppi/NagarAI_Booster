@@ -33,6 +33,7 @@ import math
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 # ----------------------------------------------------------------------------
 # Tunable parameters -- tune these against your own adversarial test set
@@ -187,8 +188,40 @@ class UnionFind:
 
 
 # ----------------------------------------------------------------------------
-# Deduplication
+# Merge confidence
+#
+# 0-100, shown on every merge in the dashboard. Not a calibrated probability --
+# there is no trained model behind a merge decision to calibrate. It is a
+# normalised read of how far past the deciding threshold a merge cleared,
+# scaled per the rule that decided it. Say that on the dashboard rather than
+# implying a false precision: a merge at 51% is a threshold call, not a coin
+# flip we're unsure about, and a judge should be able to tell the difference.
 # ----------------------------------------------------------------------------
+
+def _merge_confidence(rule, *, dist=None, radius=None, sim=None,
+                      sim_floor=None, overlap=None):
+    if rule == "proximity-dominant":
+        # Same spot: confidence is about physical distance, not text at all.
+        # At the same GPS point that's ~100%; at the edge of "same spot" (35%
+        # of the category radius) it's 90% -- still confident, just less so.
+        frac = min(max(dist / (PROXIMITY_DOMINANT_FRACTION * radius), 0), 1) if radius else 0
+        return round(100 - 10 * frac)
+
+    if rule == "geo + semantic":
+        # Right at the threshold (where the C011/C012 case in
+        # docs/TECHNICAL_NOTE.md sits, a 0.03 margin) reads as 50%: a
+        # threshold call we made, not a confident match. A perfect-similarity
+        # pair reads as 100%.
+        span = max(1 - sim_floor, 1e-6)
+        return round(min(100, max(50, 50 + 50 * (sim - sim_floor) / span)))
+
+    # no-GPS text fallback -- two independent weak signals (semantic
+    # similarity and location-text overlap) both had to clear their floor, so
+    # confidence blends how far each cleared it rather than picking one.
+    sim_component = (sim - sim_floor) / max(1 - sim_floor, 1e-6)
+    overlap_component = (overlap - 0.30) / max(1 - 0.30, 1e-6)
+    return round(min(100, max(50, 50 + 50 * (sim_component + overlap_component) / 2)))
+
 
 def deduplicate(complaints, vectors, backend="sbert"):
     """Return (clusters, merge_log). Every merge records why it happened."""
@@ -233,6 +266,7 @@ def deduplicate(complaints, vectors, backend="sbert"):
                     reason = (f"{dist:.0f} m apart, within "
                               f"{PROXIMITY_DOMINANT_FRACTION:.0%} of the "
                               f"{radius} m radius ({sim_note})")
+                    confidence = _merge_confidence(rule, dist=dist, radius=radius)
                 else:
                     # Stage 3b -- borderline distance, text must agree
                     if sim < sim_floor:
@@ -240,6 +274,7 @@ def deduplicate(complaints, vectors, backend="sbert"):
                     rule = "geo + semantic"
                     reason = (f"{dist:.0f} m apart (limit {radius} m), "
                               f"{sim_note} = {sim:.2f} >= {sim_floor}")
+                    confidence = _merge_confidence(rule, sim=sim, sim_floor=sim_floor)
             else:
                 # Fallback -- no coordinates, so require location-text overlap
                 ta = set(_tokenize(a.get("location_text") or ""))
@@ -252,6 +287,8 @@ def deduplicate(complaints, vectors, backend="sbert"):
                 rule = "no-GPS text fallback"
                 reason = (f"no GPS; location-text overlap {overlap:.2f}, "
                           f"{sim_note} = {sim:.2f} >= {sim_floor_nogps}")
+                confidence = _merge_confidence(rule, sim=sim, sim_floor=sim_floor_nogps,
+                                               overlap=overlap)
 
             if uf.union(i, j):
                 merge_log.append({
@@ -259,6 +296,7 @@ def deduplicate(complaints, vectors, backend="sbert"):
                     "similarity": round(sim, 3),
                     "image_similarity": (round(image_sim, 3)
                                          if image_sim is not None else None),
+                    "confidence": confidence,
                     "rule": rule,
                     "reason": reason,
                     "category": a["category"],
@@ -327,6 +365,64 @@ def priority(cluster):
 
 
 # ----------------------------------------------------------------------------
+# Auto-routing and SLA timers
+#
+# A category -> department lookup and a target resolution time per category.
+# These are illustrative civic SLA targets, not sourced from a real municipal
+# service-level document -- say so rather than presenting invented numbers as
+# researched ones. Deliberately rule-based, not a model: routing a complaint
+# to a department is a lookup, not a judgment call, and the project's AI
+# budget belongs in classification, dedup, and priority, not here.
+# ----------------------------------------------------------------------------
+
+DEPARTMENT_MAP = {
+    "pothole": "Roads & Public Works",
+    "waterlogging": "Storm Water Drainage",
+    "garbage": "Sanitation",
+    "streetlight": "Electrical Maintenance",
+    "live_wire": "Electrical Emergency",
+    "other": "General Ward Office",
+}
+
+SLA_HOURS = {
+    "live_wire": 24,       # hazard -- worked same day
+    "waterlogging": 48,
+    "garbage": 72,
+    "streetlight": 120,
+    "pothole": 168,
+    "other": 168,
+}
+DEFAULT_SLA_HOURS = 168
+
+
+def parse_dt(s):
+    """ISO timestamp -> aware datetime. Public: also used by serve.py/main.py
+    for the once-per-day duplicate-report check."""
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def department_and_sla(cluster, resolved_at=None):
+    """Routing target and SLA countdown. If `resolved_at` (an ISO timestamp) is
+    given, the clock is frozen there instead of at "now" -- a cluster resolved
+    three weeks ago should not read as freshly breaching today."""
+    category = cluster[0]["category"]
+    sla_hours = SLA_HOURS.get(category, DEFAULT_SLA_HOURS)
+    opened = min(parse_dt(c["created_at"]) for c in cluster)
+    deadline = opened + timedelta(hours=sla_hours)
+    reference = parse_dt(resolved_at) if resolved_at else datetime.now(timezone.utc)
+    remaining_hours = (deadline - reference).total_seconds() / 3600
+
+    return {
+        "department": DEPARTMENT_MAP.get(category, "General Ward Office"),
+        "sla_hours": sla_hours,
+        "sla_deadline": deadline.isoformat(timespec="seconds"),
+        "sla_remaining_hours": round(remaining_hours, 1),
+        "sla_breached": remaining_hours < 0,
+    }
+
+
+# ----------------------------------------------------------------------------
 # Report
 # ----------------------------------------------------------------------------
 
@@ -357,7 +453,7 @@ def main(path):
     print("-" * 74)
     for m in merge_log:
         print(f"  {m['merged'][0]} + {m['merged'][1]}  [{m['category']}]  "
-              f"{m['rule']}")
+              f"{m['rule']}  ({m['confidence']}% confidence)")
         print(f"      {m['reason']}")
 
     print("\n" + "-" * 74)

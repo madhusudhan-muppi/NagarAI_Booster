@@ -18,6 +18,9 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 COMPLAINTS_FILE = os.path.join(DATA_DIR, "complaints.json")
 SEED_FILE = os.path.join(DATA_DIR, "seed_complaints.json")
 STATUS_FILE = os.path.join(DATA_DIR, "cluster_status.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+VERIFICATIONS_FILE = os.path.join(DATA_DIR, "verifications.json")
+TELEGRAM_LINKS_FILE = os.path.join(DATA_DIR, "telegram_links.json")
 
 _lock = threading.Lock()
 
@@ -85,10 +88,53 @@ def set_status(cluster_key, status, note=""):
         return statuses[cluster_key]
 
 
+def get_user(username):
+    return _read(USERS_FILE, {}).get(username)
+
+
+def create_user(username, record):
+    """Atomic check-and-set. Returns False if the username is already taken."""
+    with _lock:
+        users = _read(USERS_FILE, {})
+        if username in users:
+            return False
+        users[username] = record
+        _write(USERS_FILE, users)
+        return True
+
+
+def load_verifications(cluster_key=None):
+    """"Is it fixed?" citizen responses, keyed by cluster_key -> list of records."""
+    data = _read(VERIFICATIONS_FILE, {})
+    return data.get(cluster_key, []) if cluster_key else data
+
+
+def add_verification(cluster_key, record):
+    with _lock:
+        data = _read(VERIFICATIONS_FILE, {})
+        data.setdefault(cluster_key, []).append(record)
+        _write(VERIFICATIONS_FILE, data)
+        return data[cluster_key]
+
+
+def link_telegram(citizen_id, chat_id):
+    """Remembers which Telegram chat a hashed citizen_id belongs to, so a
+    resolved-status notification has somewhere to go. See backend/notify.py."""
+    with _lock:
+        links = _read(TELEGRAM_LINKS_FILE, {})
+        links[citizen_id] = chat_id
+        _write(TELEGRAM_LINKS_FILE, links)
+
+
+def get_telegram_chat(citizen_id):
+    return _read(TELEGRAM_LINKS_FILE, {}).get(citizen_id)
+
+
 def reset_to_seed():
     """Restore the judging set. Bind this to a demo-day panic button."""
     with _lock:
         seed = _read(SEED_FILE, [])
         _write(COMPLAINTS_FILE, seed)
         _write(STATUS_FILE, {})
+        _write(VERIFICATIONS_FILE, {})
         return len(seed)

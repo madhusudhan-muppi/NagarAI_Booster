@@ -14,11 +14,14 @@ Then: http://127.0.0.1:8000
 """
 
 import json
+import mimetypes
 import os
 import re
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
@@ -26,14 +29,19 @@ sys.path.insert(0, BASE_DIR)
 from backend import env                                        # noqa: E402
 env.load()
 
+from backend import auth                                       # noqa: E402
+from backend import notify                                     # noqa: E402
 from backend import store                                     # noqa: E402
 from backend.ml import intake                                  # noqa: E402
 from backend.ml.dedup_engine import (                          # noqa: E402
-    build_embedder, deduplicate, priority,
+    build_embedder, deduplicate, department_and_sla, parse_dt, priority,
 )
+
+DUPLICATE_WINDOW_HOURS = 24
 
 UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
 FRONTEND = os.path.join(BASE_DIR, "frontend", "index.html")
+GOV_FRONTEND = os.path.join(BASE_DIR, "frontend", "gov.html")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -86,6 +94,32 @@ def cluster_key(cluster):
     return min(c["id"] for c in cluster)
 
 
+def find_duplicate_cluster(candidate, citizen_id, existing):
+    """If `citizen_id` already has a complaint, filed within
+    DUPLICATE_WINDOW_HOURS, that would land in the same cluster as `candidate`,
+    return that cluster's key. Otherwise None.
+
+    Runs the real dedup pipeline against a trial list (existing + candidate)
+    rather than a cheaper heuristic, so "same issue" means exactly what it
+    means everywhere else in this system -- the category/geo/semantic cascade,
+    not a second, looser definition invented just for rate-limiting.
+    """
+    trial = existing + [candidate]
+    vectors, backend, _ = build_embedder([c["description_en"] for c in trial])
+    clusters, _ = deduplicate(trial, vectors, backend)
+    mine = next((cl for cl in clusters if candidate in cl), None)
+    if not mine or len(mine) < 2:
+        return None
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=DUPLICATE_WINDOW_HOURS)
+    for c in mine:
+        if c is candidate or c.get("citizen_id") != citizen_id:
+            continue
+        if parse_dt(c["created_at"]) >= cutoff:
+            return cluster_key(mine)
+    return None
+
+
 def build_queue():
     complaints = store.load_complaints()
     if not complaints:
@@ -102,7 +136,11 @@ def build_queue():
         p = priority(cl)
         key = cluster_key(cl)
         state = statuses.get(key, {})
+        status = state.get("status", "open")
+        sla = department_and_sla(
+            cl, resolved_at=state.get("updated_at") if status == "resolved" else None)
         centre = next((c for c in cl if c.get("location_lat") is not None), None)
+        cluster_merges = [m for m in merge_log if m["merged"][0] in {c["id"] for c in cl}]
         rows.append({
             "cluster_key": key,
             "category": p["category"],
@@ -116,17 +154,24 @@ def build_queue():
                  "description_en": c["description_en"],
                  "secondary_category": c.get("secondary_category"),
                  "transcript": c.get("transcript"),
-                 "severity": c["severity"], "photo_url": c.get("photo_url")}
+                 "severity": c["severity"], "photo_url": c.get("photo_url"),
+                 "citizen_id": c.get("citizen_id")}
                 for c in cl
             ],
             "affected_citizens": p["reporters"],
             "priority": p,
-            "merges": [m for m in merge_log
-                       if m["merged"][0] in {c["id"] for c in cl}],
+            "merges": cluster_merges,
+            # Weakest link, not the average -- a cluster is only as trustworthy
+            # as its shakiest merge. None for a cluster with one report: there
+            # was no merge decision to be confident about.
+            "merge_confidence": (min(m["confidence"] for m in cluster_merges)
+                                 if cluster_merges else None),
             "has_conflict": any(c.get("secondary_category") for c in cl),
-            "status": state.get("status", "open"),
+            "status": status,
             "status_note": state.get("note", ""),
             "updated_at": state.get("updated_at"),
+            "verifications": store.load_verifications(key),
+            **sla,
         })
 
     rows.sort(key=lambda r: (not r["hazard_lane"], -r["priority"]["final_score"]))
@@ -140,6 +185,27 @@ def build_queue():
         "embedding_backend": label,
         "merge_log": merge_log,
     }
+
+
+def my_complaints(citizen_id):
+    """A citizen's own complaints, with the status of the cluster each landed in
+    and, once resolved, their own latest "is it fixed?" response if any."""
+    rows, _ = build_queue()
+    mine = []
+    for r in rows:
+        for m in r["members"]:
+            if m["citizen_id"] == citizen_id:
+                my_verifications = [v for v in r["verifications"]
+                                    if v["citizen_id"] == citizen_id]
+                mine.append({
+                    "id": m["id"], "description_en": m["description_en"],
+                    "raw_text": m["raw_text"], "category": r["category"],
+                    "status": r["status"], "status_note": r["status_note"],
+                    "affected_citizens": r["affected_citizens"],
+                    "cluster_key": r["cluster_key"],
+                    "my_verification": my_verifications[-1] if my_verifications else None,
+                })
+    return mine
 
 
 FORMULA_DOC = {
@@ -185,31 +251,83 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _require_citizen(self):
+        """Session dict, or None after sending 401 itself."""
+        session = auth.require(self.headers, "citizen")
+        if not session:
+            self._send({"detail": "Sign in to do that."}, 401)
+            return None
+        return session
+
+    def _require_gov(self):
+        session = auth.require(self.headers, "gov")
+        if not session:
+            self._send({"detail": "Government sign-in required."}, 401)
+            return None
+        return session
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
+
+    def _serve_file(self, path):
+        if not os.path.exists(path):
+            return self._send({"error": f"{os.path.basename(path)} not found"}, 404)
+        body = open(path, "rb").read()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_binary(self, path):
+        if not os.path.isfile(path) or os.path.dirname(path) != UPLOAD_DIR.rstrip("/"):
+            return self._send({"error": "not found"}, 404)
+        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        body = open(path, "rb").read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):
         path = self.path.split("?")[0]
 
         if path in ("/", "/index.html"):
-            if not os.path.exists(FRONTEND):
-                return self._send({"error": "frontend/index.html not found"}, 404)
-            body = open(FRONTEND, "rb").read()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
+            return self._serve_file(FRONTEND)
+
+        if path in ("/gov", "/gov.html"):
+            return self._serve_file(GOV_FRONTEND)
+
+        if path.startswith("/uploads/"):
+            # basename strips any directory components (including "../"), so
+            # this can only ever resolve to a file directly inside UPLOAD_DIR.
+            name = os.path.basename(path[len("/uploads/"):])
+            return self._serve_binary(os.path.join(UPLOAD_DIR, name))
 
         if path == "/api/clusters":
+            if not self._require_gov():
+                return
             rows, stats = build_queue()
             return self._send({"clusters": rows, "stats": stats,
                                "backends": intake.backend_status()})
+
+        if path == "/api/mine":
+            session = self._require_citizen()
+            if not session:
+                return
+            return self._send({"complaints": my_complaints(session["citizen_id"])})
+
+        if path == "/api/geocode":
+            if not self._require_citizen():
+                return
+            query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+            return self._send({"results": intake.geocode_search(query)})
 
         if path == "/api/formula":
             return self._send(FORMULA_DOC)
@@ -226,6 +344,23 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         ctype = self.headers.get("Content-Type", "")
 
+        if path in ("/api/auth/signup", "/api/auth/login", "/api/auth/gov-login"):
+            try:
+                payload = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                return self._send({"detail": "Malformed request body."}, 400)
+
+            if path == "/api/auth/signup":
+                token, error = auth.signup(payload.get("username"), payload.get("password"))
+            elif path == "/api/auth/login":
+                token, error = auth.login_citizen(payload.get("username"), payload.get("password"))
+            else:
+                token, error = auth.login_gov(payload.get("password"))
+
+            if error:
+                return self._send({"detail": error}, 400)
+            return self._send({"token": token})
+
         if path == "/api/complaints":
             if ctype.startswith("multipart/form-data"):
                 fields, files = parse_multipart(body, ctype)
@@ -234,6 +369,20 @@ class Handler(BaseHTTPRequestHandler):
                     fields, files = json.loads(body or b"{}"), {}
                 except json.JSONDecodeError:
                     return self._send({"detail": "Malformed request body."}, 400)
+
+            # Telegram already verifies identity (see bot/telegram_bot.py's hashed
+            # user id), so the bot authenticates with a shared secret instead of a
+            # citizen login and its declared citizen_id is trusted. Every other
+            # caller must be a signed-in citizen -- citizen_id then comes from the
+            # session, never the request body, so it cannot be spoofed to inflate
+            # the priority formula's unique-reporter count.
+            if auth.bot_secret_ok(self.headers):
+                citizen_id = fields.get("citizen_id") or f"u_{uuid.uuid4().hex[:4]}"
+            else:
+                session = self._require_citizen()
+                if not session:
+                    return
+                citizen_id = session["citizen_id"]
 
             text = (fields.get("text") or "").strip()
             if not text and not files:
@@ -248,13 +397,23 @@ class Handler(BaseHTTPRequestHandler):
 
             complaint, trace = intake.normalise(
                 complaint_id=store.next_id(),
-                citizen_id=fields.get("citizen_id") or f"u_{uuid.uuid4().hex[:4]}",
+                citizen_id=citizen_id,
                 text=text,
                 audio_path=files.get("audio"),
                 image_path=files.get("photo"),
                 lat=num("lat"), lon=num("lon"),
                 location_text=fields.get("location_text"),
             )
+
+            existing = store.load_complaints()
+            dup_key = find_duplicate_cluster(complaint, citizen_id, existing)
+            if dup_key:
+                return self._send({
+                    "detail": (f"You already reported this issue in the last "
+                              f"{DUPLICATE_WINDOW_HOURS}h. It's tracked as {dup_key}."),
+                    "cluster_key": dup_key,
+                }, 429)
+
             store.add_complaint(complaint)
 
             rows, _ = build_queue()
@@ -270,6 +429,8 @@ class Handler(BaseHTTPRequestHandler):
 
         match = re.match(r"^/api/clusters/([^/]+)/status$", path)
         if match:
+            if not self._require_gov():
+                return
             try:
                 payload = json.loads(body or b"{}")
             except json.JSONDecodeError:
@@ -278,10 +439,50 @@ class Handler(BaseHTTPRequestHandler):
             if status not in ("open", "in_progress", "resolved"):
                 return self._send(
                     {"detail": "status must be open, in_progress, or resolved"}, 400)
-            return self._send(store.set_status(match.group(1), status,
-                                               payload.get("note", "")))
+            key = match.group(1)
+            result = store.set_status(key, status, payload.get("note", ""))
+            if status == "resolved":
+                rows, _ = build_queue()
+                row = next((r for r in rows if r["cluster_key"] == key), None)
+                if row:
+                    notify.notify_resolved(row)
+            return self._send(result)
+
+        match = re.match(r"^/api/clusters/([^/]+)/verify$", path)
+        if match:
+            session = self._require_citizen()
+            if not session:
+                return
+            if ctype.startswith("multipart/form-data"):
+                fields, files = parse_multipart(body, ctype)
+            else:
+                try:
+                    fields, files = json.loads(body or b"{}"), {}
+                except json.JSONDecodeError:
+                    return self._send({"detail": "Malformed request body."}, 400)
+
+            key = match.group(1)
+            rows, _ = build_queue()
+            row = next((r for r in rows if r["cluster_key"] == key), None)
+            if not row:
+                return self._send({"detail": "No such cluster."}, 404)
+            if session["citizen_id"] not in {m["citizen_id"] for m in row["members"]}:
+                return self._send(
+                    {"detail": "You did not file a complaint in this cluster."}, 403)
+
+            record = {
+                "citizen_id": session["citizen_id"],
+                "confirmed": str(fields.get("confirmed", "")).lower() in ("true", "1", "yes"),
+                "note": fields.get("note", ""),
+                "photo_url": (os.path.basename(files["photo"])
+                             if files.get("photo") else None),
+                "submitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            return self._send({"verifications": store.add_verification(key, record)})
 
         if path == "/api/reset":
+            if not self._require_gov():
+                return
             return self._send({"restored": store.reset_to_seed()})
 
         self._send({"error": "not found"}, 404)
@@ -298,7 +499,10 @@ def main():
     print(f"  speech     : {backends['speech']}")
     print(f"  vision     : {backends['vision']}")
     print(f"  llm        : {backends.get('llm', 'n/a')}")
-    print(f"\n  http://127.0.0.1:{port}    Ctrl-C to stop\n")
+    if not os.environ.get("GOV_PASSWORD"):
+        print("  WARNING: GOV_PASSWORD not set -- /gov login will always fail")
+    print(f"\n  citizens : http://127.0.0.1:{port}")
+    print(f"  officials: http://127.0.0.1:{port}/gov    Ctrl-C to stop\n")
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 

@@ -29,3 +29,6 @@ Thumbs.db
 data/complaints.json
 data/cluster_status.json
 data/uploads/
+data/users.json
+data/verifications.json
+data/telegram_links.json

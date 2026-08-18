@@ -132,6 +132,8 @@ def backend_status():
                        else "TF-IDF fallback"),
         "llm": ("Gemini " + GEMINI_MODEL if os.environ.get("GEMINI_API_KEY")
                 else "no key -- rule-based descriptions"),
+        "geocoding": ("Nominatim (needs network)" if probe("httpx")
+                     else "not available -- httpx not installed"),
     }
 
 
@@ -317,6 +319,93 @@ def read_exif_gps(image_path):
         return lat, lon
     except Exception:
         return None, None
+
+
+# ---------------------------------------------------------------------------
+# Landmark geocoding -- OpenStreetMap Nominatim
+#
+# Most citizens know a landmark, not a coordinate pair -- this turns "Velachery
+# bus stand" into a point on the map without asking them for GPS. This is the
+# one intake path that genuinely needs the network: no local model replaces a
+# gazetteer of every landmark name, so unlike everything else in this file,
+# there is no offline fallback here, only a documented degrade to "no map
+# position" when Nominatim is unreachable. Say so rather than pretending it's
+# covered by the "runs with zero network" claim.
+# ---------------------------------------------------------------------------
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+# Soft bias, not a hard filter (bounded=0 below): this demo covers one ward
+# (Velachery/Guindy, Chennai -- see SENSITIVE_SITES in dedup_engine.py), so
+# "railway station" should resolve to the local one, not the world's most
+# populous match. A real multi-ward deployment would derive this from the
+# complaint's ward, not a fixed box.
+GEOCODE_VIEWBOX = os.environ.get("GEOCODE_VIEWBOX", "80.15,13.05,80.30,12.90")
+
+_geocode_cache = {}
+_geocode_search_cache = {}
+
+
+def _nominatim(text, limit):
+    """Raw Nominatim hits for `text`, or [] on any failure. Shared by geocode()
+    (server-side fallback, single best guess) and geocode_search() (the
+    autocomplete the citizen picks from -- see POST /api/geocode)."""
+    try:
+        import httpx
+        resp = httpx.get(NOMINATIM_URL, params={
+            "q": text, "format": "json", "limit": limit,
+            "viewbox": GEOCODE_VIEWBOX, "bounded": 0,
+        }, headers={
+            # Nominatim's usage policy requires an identifying User-Agent and
+            # throttles or blocks requests without one.
+            "User-Agent": "NagarAI-Hackathon-Demo/1.0 (civic complaint triage)",
+        }, timeout=6.0)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        if os.environ.get("NAGARAI_DEBUG"):
+            print(f"  [geocode] {type(exc).__name__}: {exc}")
+        return []
+
+
+def geocode(location_text):
+    """Landmark text -> (lat, lon) via Nominatim, or (None, None). This is the
+    server-side safety net for citizens who typed a landmark without picking
+    an autocomplete suggestion -- a single best-guess match, cached so a
+    repeated landmark costs one network call, not one per complaint."""
+    text = (location_text or "").strip()
+    if not text:
+        return None, None
+
+    key = text.lower()
+    if key in _geocode_cache:
+        return _geocode_cache[key]
+
+    matches = _nominatim(text, limit=1)
+    result = (float(matches[0]["lat"]), float(matches[0]["lon"])) if matches else (None, None)
+    _geocode_cache[key] = result
+    return result
+
+
+def geocode_search(query, limit=5):
+    """Landmark text -> up to `limit` candidate {label, lat, lon} matches, for
+    the citizen form's live autocomplete. Letting a citizen pick the right
+    "Velachery" from a short list is far more reliable than geocode()'s single
+    blind guess, and is what actually fixes ambiguous one-word landmarks
+    silently failing to attach coordinates at all."""
+    text = (query or "").strip()
+    if len(text) < 3:
+        return []
+
+    key = (text.lower(), limit)
+    if key in _geocode_search_cache:
+        return _geocode_search_cache[key]
+
+    matches = _nominatim(text, limit=limit)
+    results = [{"label": m["display_name"], "lat": float(m["lat"]), "lon": float(m["lon"])}
+              for m in matches]
+    _geocode_search_cache[key] = results
+    return results
 
 
 # ---------------------------------------------------------------------------

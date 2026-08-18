@@ -30,8 +30,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend import env                                       # noqa: E402
 env.load()
 
+from backend import store                                     # noqa: E402
+
 API_BASE = os.environ.get("NAGARAI_API", "http://127.0.0.1:8000")
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
+
+# POST /api/complaints now requires a signed-in citizen -- except for this bot.
+# Telegram's own login already proves identity (see hash_user()), so the bot
+# authenticates with a secret shared only between it and the API, set the same
+# in both processes' .env.
+BOT_SHARED_SECRET = os.environ.get("BOT_SHARED_SECRET")
 
 WELCOME = (
     "*NagarAI* — report a civic problem\n\n"
@@ -81,10 +89,11 @@ async def submit(*, text="", photo_path=None, audio_path=None,
             opened.append(fh)
             files["audio"] = ("audio.ogg", fh, "audio/ogg")
 
+        headers = {"X-Bot-Secret": BOT_SHARED_SECRET} if BOT_SHARED_SECRET else {}
         async with httpx.AsyncClient(timeout=90.0) as client:
             r = await client.post(f"{API_BASE}/api/complaints",
                                   data={k: v for k, v in data.items() if v is not None},
-                                  files=files or None)
+                                  files=files or None, headers=headers)
             r.raise_for_status()
             return r.json()
     finally:
@@ -113,12 +122,16 @@ def confirmation(result):
 
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Remembers this citizen's chat so a resolved-status update has somewhere
+    # to be delivered later -- see backend/notify.py.
+    store.link_telegram(citizen_hash(update.message.from_user.id), update.message.chat_id)
     await update.message.reply_markdown(WELCOME)
 
 
 async def handle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     uid = citizen_hash(msg.from_user.id)
+    store.link_telegram(uid, msg.chat_id)
     pending = ctx.user_data.setdefault("pending", {})
 
     # Location arriving on its own attaches to whatever they just sent.
@@ -168,6 +181,10 @@ def main():
         raise SystemExit(
             "TELEGRAM_TOKEN is not set.\n"
             "Get one from @BotFather, then: export TELEGRAM_TOKEN='...'")
+    if not BOT_SHARED_SECRET:
+        print("WARNING: BOT_SHARED_SECRET not set -- the API will reject every "
+              "complaint this bot files. Set the same value in .env for both "
+              "the bot and the server.")
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
