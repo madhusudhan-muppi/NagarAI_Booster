@@ -17,6 +17,7 @@ the PWA and the bot share one pipeline and there is only one thing to debug.
 
 import hashlib
 import os
+import sys
 import tempfile
 
 import httpx
@@ -24,6 +25,10 @@ from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, filters,
 )
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from backend import env                                       # noqa: E402
+env.load()
 
 API_BASE = os.environ.get("NAGARAI_API", "http://127.0.0.1:8000")
 TOKEN = os.environ.get("TELEGRAM_TOKEN")

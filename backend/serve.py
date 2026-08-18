@@ -23,6 +23,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
+from backend import env                                        # noqa: E402
+env.load()
+
 from backend import store                                     # noqa: E402
 from backend.ml import intake                                  # noqa: E402
 from backend.ml.dedup_engine import (                          # noqa: E402
@@ -165,6 +168,9 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "NagarAI/0.1"
 
     def handle_one_request(self):
+        # A browser closing a connection mid-response is normal and not an error.
+        # Left unhandled it prints a full traceback per reload, which during a
+        # live demo looks like a crash.
         try:
             super().handle_one_request()
         except (BrokenPipeError, ConnectionResetError):

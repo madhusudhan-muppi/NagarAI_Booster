@@ -1,4 +1,7 @@
 
+# Secrets -- never commit real keys, .env.example is the template
+.env
+
 # ML model weights -- download via download_models.sh instead
 *.pt
 *.bin

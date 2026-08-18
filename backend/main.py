@@ -17,6 +17,9 @@ from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from backend import env                                       # noqa: E402
+env.load()
+
 from backend import store                                    # noqa: E402
 from backend.ml import intake                                 # noqa: E402
 from backend.ml.dedup_engine import (                         # noqa: E402

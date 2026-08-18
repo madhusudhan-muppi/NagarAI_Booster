@@ -67,6 +67,14 @@ SIM_THRESHOLD_NO_GPS = {   # raised floor when we fall back to text location
 # demanding text agreement there just loses recall on terse or mistyped reports.
 PROXIMITY_DOMINANT_FRACTION = 0.35
 
+# When both complaints carry a CLIP image embedding we blend it with the text
+# similarity. Text still leads: a photo tells you the KIND of defect reliably
+# but two different potholes photograph almost identically, so image similarity
+# alone would over-merge. It earns its place on terse or badly worded reports
+# where the text signal is thin.
+TEXT_WEIGHT = 0.6
+IMAGE_WEIGHT = 0.4
+
 # Categories that jump the queue regardless of how many people complained
 HAZARD_CATEGORIES = {"live_wire", "gas_leak", "open_manhole", "wall_collapse"}
 
@@ -110,9 +118,9 @@ def build_embedder(texts):
         if _ST_MODEL is None:
             from sentence_transformers import SentenceTransformer
             _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
-        vectors = _ST_MODEL.encode(texts, normalize_embeddings=True)
-        return ([list(map(float, v)) for v in vectors], "sbert",
-                "sentence-transformers/all-MiniLM-L6-v2")
+        model = _ST_MODEL
+        vectors = model.encode(texts, normalize_embeddings=True)
+        return [list(map(float, v)) for v in vectors], "sbert", "sentence-transformers/all-MiniLM-L6-v2"
     except Exception:
         return _tfidf(texts), "tfidf", "TF-IDF fallback (no ML model downloaded)"
 
@@ -197,7 +205,17 @@ def deduplicate(complaints, vectors, backend="sbert"):
             if a["category"] != b["category"]:
                 continue
 
-            sim = cosine(vectors[i], vectors[j])
+            text_sim = cosine(vectors[i], vectors[j])
+            va, vb = a.get("image_vec"), b.get("image_vec")
+            if va and vb and len(va) == len(vb):
+                image_sim = cosine(va, vb)
+                sim = TEXT_WEIGHT * text_sim + IMAGE_WEIGHT * image_sim
+                sim_note = f"text {text_sim:.2f} + image {image_sim:.2f}"
+            else:
+                sim = text_sim
+                image_sim = None
+                sim_note = f"text {text_sim:.2f}"
+
             has_gps = (a.get("location_lat") is not None and
                        b.get("location_lat") is not None)
 
@@ -214,14 +232,14 @@ def deduplicate(complaints, vectors, backend="sbert"):
                     rule = "proximity-dominant"
                     reason = (f"{dist:.0f} m apart, within "
                               f"{PROXIMITY_DOMINANT_FRACTION:.0%} of the "
-                              f"{radius} m radius (sim {sim:.2f})")
+                              f"{radius} m radius ({sim_note})")
                 else:
                     # Stage 3b -- borderline distance, text must agree
                     if sim < sim_floor:
                         continue
                     rule = "geo + semantic"
                     reason = (f"{dist:.0f} m apart (limit {radius} m), "
-                              f"sim {sim:.2f} >= {sim_floor}")
+                              f"{sim_note} = {sim:.2f} >= {sim_floor}")
             else:
                 # Fallback -- no coordinates, so require location-text overlap
                 ta = set(_tokenize(a.get("location_text") or ""))
@@ -233,12 +251,14 @@ def deduplicate(complaints, vectors, backend="sbert"):
                     continue
                 rule = "no-GPS text fallback"
                 reason = (f"no GPS; location-text overlap {overlap:.2f}, "
-                          f"sim {sim:.2f} >= {sim_floor_nogps}")
+                          f"{sim_note} = {sim:.2f} >= {sim_floor_nogps}")
 
             if uf.union(i, j):
                 merge_log.append({
                     "merged": (a["id"], b["id"]),
                     "similarity": round(sim, 3),
+                    "image_similarity": (round(image_sim, 3)
+                                         if image_sim is not None else None),
                     "rule": rule,
                     "reason": reason,
                     "category": a["category"],

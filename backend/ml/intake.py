@@ -157,21 +157,105 @@ def transcribe(audio_path, language=None):
 # Stage 2 -- vision
 # ---------------------------------------------------------------------------
 
+# Prompt ensembling. A single caption per class is brittle -- CLIP is sensitive
+# to phrasing, and one unlucky template sinks a whole category. Averaging the
+# text embeddings of several phrasings per class is the standard fix and costs
+# nothing at inference, because the class vectors are computed once.
 CLIP_PROMPTS = {
-    "pothole": "a photo of a large pothole in a damaged road",
-    "garbage": "a photo of an overflowing garbage bin and street litter",
-    "streetlight": "a photo of a broken street light on a dark road",
-    "waterlogging": "a photo of a flooded street with standing water",
-    "live_wire": "a photo of a dangerous hanging electrical wire",
-    "other": "a photo of an ordinary street with no visible problem",
+    "pothole": [
+        "a photo of a large pothole in a road",
+        "a damaged road surface with a deep hole",
+        "broken asphalt with a crater in the street",
+        "a road with potholes filled with water",
+    ],
+    "garbage": [
+        "a photo of an overflowing garbage bin",
+        "a pile of trash and rubbish on the street",
+        "uncollected waste dumped by the roadside",
+        "litter and plastic waste scattered on the ground",
+    ],
+    "streetlight": [
+        "a photo of a broken street light",
+        "a damaged lamp post on a road",
+        "a street light that is not working at night",
+        "a dark street with a faulty lamp post",
+    ],
+    "waterlogging": [
+        "a photo of a flooded street with standing water",
+        "a waterlogged road after heavy rain",
+        "stagnant water covering a street",
+        "vehicles driving through a flooded road",
+    ],
+    "live_wire": [
+        "a photo of a dangerous hanging electrical wire",
+        "an exposed live electrical cable near the ground",
+        "a sparking electrical wire on a pole",
+        "tangled electrical cables hanging low over a street",
+    ],
 }
+
+# Distractors. These are NOT civic categories -- they exist so a photo that is
+# not a civic defect has somewhere to go. Without them softmax must spend all
+# its mass on the five real classes and a screenshot becomes a "pothole".
+CLIP_DISTRACTORS = [
+    "a clean well maintained street with no problems",
+    "a screenshot of a computer screen",
+    "a photo of a person or a group of people",
+    "a photo of food",
+    "an indoor room",
+    "a document or a piece of paper",
+]
+
+# Confidence gates. Below either of these we return no opinion and let the text
+# classifier decide, rather than overriding it with a guess.
+CLIP_MIN_PROB = 0.28      # top class must clear this
+CLIP_MIN_MARGIN = 0.06    # and beat the runner-up by this much
+
+_clip_text_cache = None
+
+
+def _clip_class_vectors(model, tokenizer, torch):
+    """Averaged text embedding per class, computed once."""
+    global _clip_text_cache
+    if _clip_text_cache is not None:
+        return _clip_text_cache
+
+    labels, vectors = [], []
+    groups = list(CLIP_PROMPTS.items()) + [("__distractor__", CLIP_DISTRACTORS)]
+    with torch.no_grad():
+        for label, prompts in groups:
+            if label == "__distractor__":
+                # each distractor stays separate -- averaging them would blur
+                # "food" and "screenshot" into a meaningless centroid
+                for prompt in prompts:
+                    feat = model.encode_text(tokenizer([prompt]))
+                    feat /= feat.norm(dim=-1, keepdim=True)
+                    labels.append(label)
+                    vectors.append(feat)
+            else:
+                feat = model.encode_text(tokenizer(prompts))
+                feat /= feat.norm(dim=-1, keepdim=True)
+                feat = feat.mean(dim=0, keepdim=True)
+                feat /= feat.norm(dim=-1, keepdim=True)
+                labels.append(label)
+                vectors.append(feat)
+        stacked = torch.cat(vectors, dim=0)
+    _clip_text_cache = (labels, stacked)
+    return _clip_text_cache
 
 
 def classify_image(image_path):
-    """Photo -> (category, severity, method). Falls back cleanly."""
+    """
+    Photo -> (category, severity, method, image_vector).
+
+    Returns category None when the model is not confident enough, so a weak
+    visual guess never overrides a clear textual signal. The image vector is
+    returned regardless -- deduplication uses it even when classification
+    abstains.
+    """
     bundle = _get_clip()
     if bundle is None:
-        return None, None, "vision-unavailable"
+        return None, None, "vision-unavailable", None
 
     model, preprocess, tokenizer, torch = bundle
     try:
@@ -179,66 +263,33 @@ def classify_image(image_path):
         img = Image.open(image_path).convert("RGB")
         img = ImageOps.exif_transpose(img)      # the sideways-photo judging test
 
-        labels = list(CLIP_PROMPTS)
-        tokens = tokenizer([CLIP_PROMPTS[k] for k in labels])
+        labels, class_vectors = _clip_class_vectors(model, tokenizer, torch)
         with torch.no_grad():
             image_features = model.encode_image(preprocess(img).unsqueeze(0))
-            text_features = model.encode_text(tokens)
             image_features /= image_features.norm(dim=-1, keepdim=True)
-            text_features /= text_features.norm(dim=-1, keepdim=True)
-            probs = (100.0 * image_features @ text_features.T).softmax(dim=-1)[0]
+            probs = (100.0 * image_features @ class_vectors.T).softmax(dim=-1)[0]
 
-        best = int(probs.argmax())
-        category = labels[best]
-        confidence = float(probs[best])
+        image_vec = [float(x) for x in image_features[0]]
 
-        # Severity: base for the category, nudged by classifier confidence.
-        # Coarse and we say so -- extent estimation from a single photo without
-        # a reference object is not a solved problem.
-        severity = BASE_SEVERITY.get(category, 2)
-        if confidence > 0.65 and severity < 5:
-            severity += 1
-        return category, severity, f"clip:{confidence:.2f}"
-    except Exception as exc:
-        return None, None, f"vision-error:{type(exc).__name__}"
+        ranked = sorted(zip(labels, (float(p) for p in probs)),
+                        key=lambda x: -x[1])
+        top_label, top_prob = ranked[0]
+        runner_up = ranked[1][1] if len(ranked) > 1 else 0.0
 
-_geo_cache = {}
+        if top_label == "__distractor__":
+            return None, None, f"clip:not-a-civic-issue ({top_prob:.2f})", image_vec
+        if top_prob < CLIP_MIN_PROB or (top_prob - runner_up) < CLIP_MIN_MARGIN:
+            return None, None, f"clip:low-confidence ({top_prob:.2f})", image_vec
 
-
-def geocode(place, region="Chennai, Tamil Nadu, India"):
-    """
-    Landmark text -> (lat, lon), via OpenStreetMap Nominatim.
-
-    The third location path the problem statement asks for, alongside GPS share
-    and photo EXIF. Most citizens type a landmark and never share coordinates,
-    so without this they never reach the map at all.
-
-    Results are cached: Nominatim asks for at most one request per second, and
-    the same landmark recurs constantly across complaints.
-    """
-    if not place:
-        return None, None
-    key = place.strip().lower()
-    if key in _geo_cache:
-        return _geo_cache[key]
-    try:
-        import httpx
-        resp = httpx.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{place}, {region}", "format": "json", "limit": 1},
-            headers={"User-Agent": "NagarAI/0.1 (civic complaint prototype)"},
-            timeout=8.0,
-        )
-        resp.raise_for_status()
-        hits = resp.json()
-        result = ((float(hits[0]["lat"]), float(hits[0]["lon"]))
-                  if hits else (None, None))
+        # Severity from the category table. Confidence measures how sure the
+        # model is about WHAT it sees, not how bad it is -- using it as a
+        # severity signal was conflating two different things.
+        severity = BASE_SEVERITY.get(top_label, 2)
+        return top_label, severity, f"clip:{top_label} {top_prob:.2f}", image_vec
     except Exception as exc:
         if os.environ.get("NAGARAI_DEBUG"):
-            print(f"  [geocode] {type(exc).__name__}: {exc}")
-        result = (None, None)
-    _geo_cache[key] = result
-    return result
+            print(f"  [vision] {type(exc).__name__}: {exc}")
+        return None, None, f"vision-error:{type(exc).__name__}", None
 
 
 def read_exif_gps(image_path):
@@ -306,9 +357,6 @@ def clean_description(text, category):
     return cut + "..."
 
 
-_llm_cache = {}
-
-
 def llm_extract(raw_text, location_hint=None, api_key=None):
     """
     Structured extraction: category + clean English one-liner, in one call.
@@ -321,23 +369,18 @@ def llm_extract(raw_text, location_hint=None, api_key=None):
     Returns None when no key is configured or the call fails, and the caller
     falls back to keyword classification. The demo must run offline.
     """
-    if os.environ.get("NAGARAI_NO_LLM"):
-        return None
-
     key = api_key or os.environ.get("GEMINI_API_KEY")
     if not key:
         return None
-
-    cached = _llm_cache.get((raw_text, location_hint))
-    if cached is not None:
-        return cached
-
     try:
         import httpx
         generation_config = {"maxOutputTokens": 800, "temperature": 0}
         if os.environ.get("GEMINI_NO_THINKING", "1") == "1":
+            # Gemini 3.x reasons before answering and those thinking tokens count
+            # against maxOutputTokens -- at 200 the budget was consumed before any
+            # visible text. Off by default; Lite models reject the parameter, so
+            # GEMINI_NO_THINKING=0 for those.
             generation_config["thinkingConfig"] = {"thinkingBudget": 0}
-
         resp = httpx.post(
             GEMINI_URL.format(model=GEMINI_MODEL),
             headers={"x-goog-api-key": key, "Content-Type": "application/json"},
@@ -369,7 +412,7 @@ def llm_extract(raw_text, location_hint=None, api_key=None):
             return None
         parts = candidates[0].get("content", {}).get("parts", [])
         text = " ".join(p.get("text", "") for p in parts).strip()
-        match = re.search(r"\{.*\}", text, re.S)     # first JSON object, fence or not
+        match = re.search(r"\{.*\}", text, re.S)   # first JSON object, fence or not
         if not match:
             return None
         data = json.loads(match.group(0))
@@ -380,9 +423,7 @@ def llm_extract(raw_text, location_hint=None, api_key=None):
         description = (data.get("description_en") or "").strip() or None
         if not (category or description):
             return None
-        result = {"category": category, "description_en": description}
-        _llm_cache[(raw_text, location_hint)] = result
-        return result
+        return {"category": category, "description_en": description}
     except Exception as exc:
         if os.environ.get("NAGARAI_DEBUG"):
             print(f"  [llm] {type(exc).__name__}: {exc}")
@@ -417,9 +458,9 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
     else:
         transcript = None
 
-    image_category = image_severity = None
+    image_category = image_severity = image_vec = None
     if image_path:
-        image_category, image_severity, how = classify_image(image_path)
+        image_category, image_severity, how, image_vec = classify_image(image_path)
         trace["vision"] = how
         if lat is None or lon is None:
             elat, elon = read_exif_gps(image_path)
@@ -494,6 +535,7 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
         "raw_text": raw_text,
         "transcript": transcript,
         "photo_url": os.path.basename(image_path) if image_path else None,
+        "image_vec": image_vec,
         "category": category,
         "secondary_category": secondary,
         "severity": severity,
