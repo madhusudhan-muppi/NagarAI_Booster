@@ -44,6 +44,9 @@ KEYWORDS = {
 HAZARD_WORDS = ["danger", "dangerous", "die", "death", "kill", "shock",
                 "sparking", "child", "school", "accident", "fell", "injured"]
 
+# Categories that jump the queue. Kept in step with dedup_engine.HAZARD_CATEGORIES.
+HAZARD_CATEGORIES = {"live_wire", "gas_leak", "open_manhole", "wall_collapse"}
+
 BASE_SEVERITY = {
     "live_wire": 5,
     "waterlogging": 4,
@@ -199,6 +202,44 @@ def classify_image(image_path):
     except Exception as exc:
         return None, None, f"vision-error:{type(exc).__name__}"
 
+_geo_cache = {}
+
+
+def geocode(place, region="Chennai, Tamil Nadu, India"):
+    """
+    Landmark text -> (lat, lon), via OpenStreetMap Nominatim.
+
+    The third location path the problem statement asks for, alongside GPS share
+    and photo EXIF. Most citizens type a landmark and never share coordinates,
+    so without this they never reach the map at all.
+
+    Results are cached: Nominatim asks for at most one request per second, and
+    the same landmark recurs constantly across complaints.
+    """
+    if not place:
+        return None, None
+    key = place.strip().lower()
+    if key in _geo_cache:
+        return _geo_cache[key]
+    try:
+        import httpx
+        resp = httpx.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": f"{place}, {region}", "format": "json", "limit": 1},
+            headers={"User-Agent": "NagarAI/0.1 (civic complaint prototype)"},
+            timeout=8.0,
+        )
+        resp.raise_for_status()
+        hits = resp.json()
+        result = ((float(hits[0]["lat"]), float(hits[0]["lon"]))
+                  if hits else (None, None))
+    except Exception as exc:
+        if os.environ.get("NAGARAI_DEBUG"):
+            print(f"  [geocode] {type(exc).__name__}: {exc}")
+        result = (None, None)
+    _geo_cache[key] = result
+    return result
+
 
 def read_exif_gps(image_path):
     """Photo metadata -> (lat, lon) or (None, None)."""
@@ -268,7 +309,7 @@ def clean_description(text, category):
 _llm_cache = {}
 
 
-def llm_extract(raw_text, api_key=None):
+def llm_extract(raw_text, location_hint=None, api_key=None):
     """
     Structured extraction: category + clean English one-liner, in one call.
 
@@ -287,7 +328,7 @@ def llm_extract(raw_text, api_key=None):
     if not key:
         return None
 
-    cached = _llm_cache.get(raw_text)
+    cached = _llm_cache.get((raw_text, location_hint))
     if cached is not None:
         return cached
 
@@ -312,7 +353,9 @@ def llm_extract(raw_text, api_key=None):
                             "characters keeping the location and the problem\n\n"
                             "Use live_wire for any hanging, sparking, or exposed "
                             "electrical cable. Use other only if nothing else fits.\n\n"
-                            f"Complaint: {raw_text}"
+                            + (f"The citizen gave this landmark: {location_hint}. "
+                               "Use it in the description.\n\n" if location_hint else "")
+                            + f"Complaint: {raw_text}"
                         )
                     }]
                 }],
@@ -326,8 +369,10 @@ def llm_extract(raw_text, api_key=None):
             return None
         parts = candidates[0].get("content", {}).get("parts", [])
         text = " ".join(p.get("text", "") for p in parts).strip()
-        text = re.sub(r"^```(?:json)?|```$", "", text.strip()).strip()
-        data = json.loads(text)
+        match = re.search(r"\{.*\}", text, re.S)     # first JSON object, fence or not
+        if not match:
+            return None
+        data = json.loads(match.group(0))
 
         category = data.get("category")
         if category not in CATEGORIES:
@@ -336,7 +381,7 @@ def llm_extract(raw_text, api_key=None):
         if not (category or description):
             return None
         result = {"category": category, "description_en": description}
-        _llm_cache[raw_text] = result
+        _llm_cache[(raw_text, location_hint)] = result
         return result
     except Exception as exc:
         if os.environ.get("NAGARAI_DEBUG"):
@@ -385,8 +430,15 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
     raw_text = " ".join(raw_parts).strip()
     text_category, matched = classify_text(raw_text)
 
-    llm = llm_extract(raw_text) if (use_llm and raw_text) else None
+    llm = llm_extract(raw_text, location_text) if (use_llm and raw_text) else None
     llm_category = llm.get("category") if llm else None
+
+    # "other" is the model declining to classify, not a claim about the
+    # complaint. It must not override a confident keyword hit -- a terse Tamil
+    # report like "kambi kashtama irukku" reads as vague to a general-purpose
+    # model but matches our domain vocabulary exactly.
+    if llm_category == "other":
+        llm_category = None
 
     # Vision wins on category when it fired, because a photo of a pothole is
     # stronger evidence than the word "road" appearing in a sentence.
@@ -396,6 +448,13 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
     trace["category_source"] = ("vision" if image_category
                                 else "llm" if llm_category
                                 else f"keywords:{matched or 'none'}")
+
+    # Safety asymmetry: filing a live wire as garbage is far worse than the
+    # reverse. When the keyword table sees a hazard and the other classifiers
+    # do not, we take the hazard and let a ward officer downgrade it.
+    if text_category in HAZARD_CATEGORIES and category not in HAZARD_CATEGORIES and matched:
+        trace["hazard_override"] = f"{category} -> {text_category} on {matched}"
+        category = text_category
 
     # Modalities can disagree -- a photo of a pothole with a voice note about
     # garbage. We still file ONE complaint, because the statement asks for any
@@ -411,10 +470,16 @@ def normalise(*, complaint_id, citizen_id, text="", audio_path=None,
 
     severity = image_severity or estimate_severity(category, raw_text)
 
+    if lat is None and location_text:
+        glat, glon = geocode(location_text)
+        if glat is not None:
+            lat, lon = glat, glon
+            trace["location"] = "geocoded-landmark"
+
     if lat is not None and trace.get("location") is None:
         trace["location"] = "gps-share"
     elif lat is None:
-        trace["location"] = "text-only"
+        trace["location"] = "no-location"
 
     description = llm.get("description_en") if llm else None
     if description:

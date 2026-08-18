@@ -226,18 +226,18 @@
   },
   {
     "id": "C016",
-    "citizen_id": "u_a893",
-    "raw_text": "velachery train station la wire thongudhu",
+    "citizen_id": "u_6bdd",
+    "raw_text": "Velachery bus stand la periya pallam irukku.",
     "transcript": null,
     "photo_url": null,
-    "category": "live_wire",
+    "category": "pothole",
     "secondary_category": null,
-    "severity": 5,
-    "location_lat": 13.0135,
-    "location_lon": 80.221,
+    "severity": 3,
+    "location_lat": 12.9689,
+    "location_lon": 80.2392,
     "location_text": null,
-    "description_en": "velachery train station la wire thongudhu",
-    "created_at": "2026-08-17T20:00:35+00:00",
+    "description_en": "Large pothole at Velachery bus stand.",
+    "created_at": "2026-08-18T01:49:22+00:00",
     "days_pending": 0
   }
 ]
